@@ -1853,17 +1853,43 @@
 
             btnSend?.addEventListener('click', () => handleSendChatMessage());
 
+            let chatAudioFileBase64 = null;
+            let chatAudioFileMime = 'audio/mp4';
+            let chatAudioFileName = '';
+
             btnPhoto?.addEventListener('click', () => fileInput?.click());
             fileInput?.addEventListener('change', (e) => {
                 const file = e.target.files[0];
-                if (!file || !file.type.startsWith('image/')) return;
+                if (!file) return;
+                
+                const isImage = file.type.startsWith('image/');
+                const isAudio = file.type.startsWith('audio/') || /\.(m4a|mp3|wav|ogg|aac|webm|flac|caf)$/i.test(file.name);
+                
+                if (!isImage && !isAudio) {
+                    showToast('僅支援圖片 (.jpg, .png) 或音訊檔案 (.m4a, .mp3, .wav, .webm)', 'error');
+                    return;
+                }
+
                 const reader = new FileReader();
                 reader.onload = (event) => {
-                    chatImageBase64 = event.target.result;
-                    chatImageMime = file.type || 'image/jpeg';
-                    chatImageName = file.name || 'receipt.jpg';
-                    if (imageThumbnail) imageThumbnail.src = chatImageBase64;
-                    if (imageNameEl) imageNameEl.textContent = chatImageName;
+                    if (isImage) {
+                        chatImageBase64 = event.target.result;
+                        chatImageMime = file.type || 'image/jpeg';
+                        chatImageName = file.name || 'receipt.jpg';
+                        chatAudioFileBase64 = null;
+                        if (imageThumbnail) {
+                            imageThumbnail.src = chatImageBase64;
+                            imageThumbnail.classList.remove('hidden');
+                        }
+                        if (imageNameEl) imageNameEl.textContent = chatImageName;
+                    } else {
+                        chatAudioFileBase64 = event.target.result;
+                        chatAudioFileMime = file.type || 'audio/mp4';
+                        chatAudioFileName = file.name || 'voice.m4a';
+                        chatImageBase64 = null;
+                        if (imageThumbnail) imageThumbnail.classList.add('hidden');
+                        if (imageNameEl) imageNameEl.innerHTML = `<span class="inline-flex items-center gap-1 text-teal-900 font-bold">🎙️ ${escapeHtml(chatAudioFileName)}</span>`;
+                    }
                     imagePreviewBar?.classList.remove('hidden');
                     imagePreviewBar?.classList.add('flex');
                 };
@@ -1873,6 +1899,8 @@
             btnRemoveImage?.addEventListener('click', () => {
                 chatImageBase64 = null;
                 chatImageName = '';
+                chatAudioFileBase64 = null;
+                chatAudioFileName = '';
                 if (fileInput) fileInput.value = '';
                 imagePreviewBar?.classList.add('hidden');
                 imagePreviewBar?.classList.remove('flex');
@@ -1881,19 +1909,14 @@
             // 🎙️ 錄音控制核心邏輯 (MediaRecorder)
             async function startRecording() {
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    showToast('瀏覽器不支援錄音或需在 HTTPS / localhost 安全連線下執行', 'error');
+                    showToast('GAS 瀏覽器沙盒限制 iframe 麥克風：請直接點選相機/檔案圖示 📂 上傳語音檔（.m4a/.mp3）辨識！', 'error');
                     return;
                 }
 
                 try {
                     audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 } catch (err) {
-                    const isPermissionDenied = err.name === 'NotAllowedError' || err.name === 'SecurityError';
-                    if (isPermissionDenied) {
-                        showToast('無法存取麥克風：若在試算表側邊欄內嵌環境受限，請改用「Web App 獨立網頁」開啟即可正常語音記帳！', 'error');
-                    } else {
-                        showToast('麥克風存取失敗: ' + (err.message || err.name), 'error');
-                    }
+                    showToast('GAS 內嵌沙盒限制即時錄音：請點擊迴紋針/相機 📂 直接上傳語音檔（.m4a/.mp3/錄音檔）即可由 Gemini 解析！', 'error');
                     return;
                 }
 
@@ -2041,8 +2064,8 @@
                 const text = (chatTextInput?.value || '').trim();
                 const image = chatImageBase64;
                 const mime = chatImageMime;
-                const audio = extraMedia?.audioBase64 || null;
-                const audioMime = extraMedia?.audioMime || actualAudioMime || 'audio/webm';
+                const audio = extraMedia?.audioBase64 || chatAudioFileBase64 || null;
+                const audioMime = extraMedia?.audioMime || chatAudioFileMime || actualAudioMime || 'audio/webm';
 
                 if (!text && !image && !audio) return showToast('請先輸入文字、錄製語音或上傳照片', 'error');
 
@@ -2063,6 +2086,8 @@
 
                 if (chatTextInput) chatTextInput.value = '';
                 chatImageBase64 = null;
+                chatAudioFileBase64 = null;
+                chatAudioFileName = '';
                 if (fileInput) fileInput.value = '';
                 imagePreviewBar?.classList.add('hidden');
                 imagePreviewBar?.classList.remove('flex');
