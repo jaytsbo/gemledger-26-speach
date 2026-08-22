@@ -428,28 +428,17 @@
                         <button type="button" class="chat-prompt-chip shrink-0 bg-slate-100 hover:bg-teal-50 text-slate-700 px-2 py-0.5 rounded-lg border border-slate-200/80 text-[11px]">💰 接案收入 35000 元 永豐銀行</button>
                     </div>
 
-                    <!-- Recording Indicator Banner -->
-                    <div id="chat-recording-banner" class="hidden items-center justify-between gap-3 bg-rose-50 p-2.5 rounded-xl border border-rose-200">
-                        <div class="flex items-center gap-2 text-rose-700 text-xs font-semibold">
-                            <span class="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping"></span>
-                            <span id="chat-recording-timer">● 錄音中 00:00...</span>
-                            <span class="text-rose-500 font-normal text-[11px] hidden sm:inline">點擊紅色停止鈕結束並發送</span>
-                        </div>
-                        <button id="btn-cancel-recording" type="button" title="取消錄音" class="px-2 py-0.5 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-100 rounded-lg">
-                            取消
-                        </button>
-                    </div>
-
                     <!-- Streamlined Input Bar -->
                     <div class="flex items-end gap-1.5 bg-slate-50 focus-within:bg-white rounded-2xl p-1.5 border border-slate-200 focus-within:border-teal-600 transition-all">
                         <input type="file" id="chat-file-input" accept="image/*" class="hidden">
+                        <input type="file" id="chat-audio-input" accept="audio/*" class="hidden">
                         <button id="btn-chat-photo" type="button" title="拍照或上傳發票" class="p-2 text-slate-500 hover:text-teal-700 rounded-xl shrink-0">
                             <i data-lucide="camera" class="w-5 h-5"></i>
                         </button>
-                        <textarea id="chat-text-input" rows="1" placeholder="輸入消費（例：全聯 350 元 LINE Pay）或點麥克風/相機..." class="w-full bg-transparent border-0 focus:ring-0 text-slate-900 placeholder-slate-400 text-xs sm:text-sm py-1.5 px-1 resize-none outline-none max-h-24 leading-relaxed"></textarea>
-                        <button id="btn-chat-mic" type="button" title="語音記帳錄音" class="p-2 text-slate-500 hover:text-teal-700 rounded-xl shrink-0 transition-all">
+                        <button id="btn-chat-mic" type="button" title="語音錄音或音訊" class="p-2 text-slate-500 hover:text-teal-700 rounded-xl shrink-0">
                             <i data-lucide="mic" class="w-5 h-5"></i>
                         </button>
+                        <textarea id="chat-text-input" rows="1" placeholder="輸入消費（例：全聯 350 元 LINE Pay）或點語音/相機..." class="w-full bg-transparent border-0 focus:ring-0 text-slate-900 placeholder-slate-400 text-xs sm:text-sm py-1.5 px-1 resize-none outline-none max-h-24 leading-relaxed"></textarea>
                         <button id="btn-chat-send" type="button" title="發送記帳" class="p-2 bg-gradient-to-r from-teal-600 to-emerald-600 text-white rounded-xl shadow-xs shrink-0">
                             <i data-lucide="send" class="w-4 h-4"></i>
                         </button>
@@ -1010,69 +999,66 @@
                 });
             },
 
-            // 11. 調用 Gemini 智慧自然語言/多模態音訊與影像記帳解析
-            callGeminiBookkeeper: (userMessage, imageBase64, mimeType, audioBase64, audioMimeType) => {
+            // 11. 調用 Gemini 智慧自然語言記帳解析
+            callGeminiBookkeeper: (userMessage, imageBase64, mimeType) => {
                 if (isGasEnv) {
                     return new Promise((resolve, reject) => {
                         google.script.run
                             .withSuccessHandler(resolve)
                             .withFailureHandler(reject)
-                            .callGeminiBookkeeper(userMessage, imageBase64, mimeType, audioBase64, audioMimeType);
+                            .callGeminiBookkeeper(userMessage, imageBase64, mimeType);
                     });
                 }
-                return mockDelay(600).then(() => {
+                return mockDelay(500).then(() => {
                     const msg = (userMessage || '').trim();
+                    const isAudio = mimeType && mimeType.startsWith('audio/');
+                    const defaultName = isAudio ? '語音辨識消費' : '照片辨識消費';
                     const today = new Date().toISOString().split('T')[0];
                     const time = new Date().toTimeString().slice(0, 5);
                     const settings = LocalStorageAdapter.getSettings();
                     const defaultAcc = settings.accounts[0] || '現金';
 
-                    // 本地 Mock：若有音訊且無輸入文字，模擬「早餐 漢堡蛋 65 元 現金」
-                    let parsedName = msg || (audioBase64 ? '早餐 漢堡蛋' : (imageBase64 ? '照片辨識消費' : '語音記帳消費'));
-                    let parsedAmount = (audioBase64 && !msg) ? -65 : -150;
+                    let parsedName = msg || defaultName;
+                    let parsedAmount = -150;
                     let parsedCategory = '食';
                     let parsedCurrency = 'TWD';
-                    let parsedAccount = defaultAcc;
 
-                    if (msg) {
-                        const numMatch = msg.match(/(\d+(?:\.\d+)?)/);
-                        if (numMatch) {
-                            const val = parseFloat(numMatch[1]);
-                            if (!isNaN(val)) parsedAmount = -Math.abs(val);
-                        }
-                        if (msg.includes('收入') || msg.includes('薪水') || msg.includes('獎金') || msg.includes('領錢') || msg.includes('退款') || msg.includes('配息')) {
-                            parsedAmount = Math.abs(parsedAmount);
-                            parsedCategory = '收入';
-                        } else if (msg.includes('拉麵') || msg.includes('午餐') || msg.includes('晚餐') || msg.includes('早餐') || msg.includes('咖啡') || msg.includes('吃') || msg.includes('便當') || msg.includes('漢堡')) {
-                            parsedCategory = '食';
-                        } else if (msg.includes('捷運') || msg.includes('公車') || msg.includes('高鐵') || msg.includes('計程車') || msg.includes('加油') || msg.includes('悠遊卡')) {
-                            parsedCategory = '行';
-                        } else if (msg.includes('衣服') || msg.includes('鞋') || msg.includes('買包')) {
-                            parsedCategory = '衣';
-                        } else if (msg.includes('電影') || msg.includes('遊戲') || msg.includes('玩') || msg.includes('展覽')) {
-                            parsedCategory = '育樂';
-                        } else if (msg.includes('書') || msg.includes('課程') || msg.includes('訂閱') || msg.includes('伺服器')) {
-                            parsedCategory = '學習費用';
-                        }
-
-                        if (msg.toLowerCase().includes('jpy') || msg.includes('日圓') || msg.includes('日幣')) parsedCurrency = 'JPY';
-                        else if (msg.toLowerCase().includes('usd') || msg.includes('美金') || msg.includes('美元')) parsedCurrency = 'USD';
-                        else if (msg.toLowerCase().includes('krw') || msg.includes('韓元')) parsedCurrency = 'KRW';
+                    const numMatch = msg.match(/(\d+(?:\.\d+)?)/);
+                    if (numMatch) {
+                        const val = parseFloat(numMatch[1]);
+                        if (!isNaN(val)) parsedAmount = -Math.abs(val);
+                    }
+                    if (msg.includes('收入') || msg.includes('薪水') || msg.includes('獎金') || msg.includes('領錢') || msg.includes('退款') || msg.includes('配息')) {
+                        parsedAmount = Math.abs(parsedAmount);
+                        parsedCategory = '收入';
+                    } else if (msg.includes('拉麵') || msg.includes('午餐') || msg.includes('晚餐') || msg.includes('早餐') || msg.includes('咖啡') || msg.includes('吃') || msg.includes('便當')) {
+                        parsedCategory = '食';
+                    } else if (msg.includes('捷運') || msg.includes('公車') || msg.includes('高鐵') || msg.includes('計程車') || msg.includes('加油') || msg.includes('悠遊卡')) {
+                        parsedCategory = '行';
+                    } else if (msg.includes('衣服') || msg.includes('鞋') || msg.includes('買包')) {
+                        parsedCategory = '衣';
+                    } else if (msg.includes('電影') || msg.includes('遊戲') || msg.includes('玩') || msg.includes('展覽')) {
+                        parsedCategory = '育樂';
+                    } else if (msg.includes('書') || msg.includes('課程') || msg.includes('訂閱') || msg.includes('伺服器')) {
+                        parsedCategory = '學習費用';
                     }
 
-                    const prefix = audioBase64 ? '🎙️ [語音多模態辨識] ' : (imageBase64 ? '📸 [發票多模態辨識] ' : '');
+                    if (msg.toLowerCase().includes('jpy') || msg.includes('日圓') || msg.includes('日幣')) parsedCurrency = 'JPY';
+                    else if (msg.toLowerCase().includes('usd') || msg.includes('美金') || msg.includes('美元')) parsedCurrency = 'USD';
+                    else if (msg.toLowerCase().includes('krw') || msg.includes('韓元')) parsedCurrency = 'KRW';
+
                     return {
-                        reply: `[本地開發環境 Mock] ${prefix}已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`,
+                        reply: `[本地開發環境 Mock] 已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`,
                         parsedTransactions: [
                             {
                                 name: parsedName,
                                 amount: parsedAmount,
                                 currency: parsedCurrency,
                                 category: parsedCategory,
-                                account: parsedAccount,
+                                account: defaultAcc,
                                 date: today,
                                 time: time,
-                                note: audioBase64 ? "本地端 Mock 語音記帳解析" : "本地端 Mock 智慧解析"
+                                note: "本地端 Mock 智慧解析"
                             }
                         ]
                     };
@@ -1789,7 +1775,7 @@
                 id: 'welcome-msg',
                 role: 'ai',
                 time: new Date().toTimeString().slice(0, 5),
-                text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字、錄製語音或上傳發票照片，確認後即可一鍵寫入試算表！',
+                text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字、錄製語音或上傳發票收據照片，確認後即可一鍵寫入試算表！',
                 transactions: []
             }
         ];
@@ -1800,24 +1786,12 @@
             const btnPhoto = document.getElementById('btn-chat-photo');
             const btnMic = document.getElementById('btn-chat-mic');
             const fileInput = document.getElementById('chat-file-input');
+            const audioInput = document.getElementById('chat-audio-input');
             const imagePreviewBar = document.getElementById('chat-image-preview-bar');
             const imageThumbnail = document.getElementById('chat-image-thumbnail');
             const imageNameEl = document.getElementById('chat-image-name');
             const btnRemoveImage = document.getElementById('btn-remove-chat-image');
             const btnClearChat = document.getElementById('btn-clear-chat-stream');
-            const recordingBanner = document.getElementById('chat-recording-banner');
-            const recordingTimerEl = document.getElementById('chat-recording-timer');
-            const btnCancelRecording = document.getElementById('btn-cancel-recording');
-
-            // 🎙️ 錄音狀態變數
-            let mediaRecorder = null;
-            let audioChunks = [];
-            let audioStream = null;
-            let isRecording = false;
-            let recordingTimer = null;
-            let recordSeconds = 0;
-            let actualAudioMime = 'audio/webm';
-            let isCancelled = false;
 
             renderChatStream();
 
@@ -1853,43 +1827,17 @@
 
             btnSend?.addEventListener('click', () => handleSendChatMessage());
 
-            let chatAudioFileBase64 = null;
-            let chatAudioFileMime = 'audio/mp4';
-            let chatAudioFileName = '';
-
             btnPhoto?.addEventListener('click', () => fileInput?.click());
             fileInput?.addEventListener('change', (e) => {
                 const file = e.target.files[0];
-                if (!file) return;
-                
-                const isImage = file.type.startsWith('image/');
-                const isAudio = file.type.startsWith('audio/') || /\.(m4a|mp3|wav|ogg|aac|webm|flac|caf)$/i.test(file.name);
-                
-                if (!isImage && !isAudio) {
-                    showToast('僅支援圖片 (.jpg, .png) 或音訊檔案 (.m4a, .mp3, .wav, .webm)', 'error');
-                    return;
-                }
-
+                if (!file || !file.type.startsWith('image/')) return;
                 const reader = new FileReader();
                 reader.onload = (event) => {
-                    if (isImage) {
-                        chatImageBase64 = event.target.result;
-                        chatImageMime = file.type || 'image/jpeg';
-                        chatImageName = file.name || 'receipt.jpg';
-                        chatAudioFileBase64 = null;
-                        if (imageThumbnail) {
-                            imageThumbnail.src = chatImageBase64;
-                            imageThumbnail.classList.remove('hidden');
-                        }
-                        if (imageNameEl) imageNameEl.textContent = chatImageName;
-                    } else {
-                        chatAudioFileBase64 = event.target.result;
-                        chatAudioFileMime = file.type || 'audio/mp4';
-                        chatAudioFileName = file.name || 'voice.m4a';
-                        chatImageBase64 = null;
-                        if (imageThumbnail) imageThumbnail.classList.add('hidden');
-                        if (imageNameEl) imageNameEl.innerHTML = `<span class="inline-flex items-center gap-1 text-teal-900 font-bold">🎙️ ${escapeHtml(chatAudioFileName)}</span>`;
-                    }
+                    chatImageBase64 = event.target.result;
+                    chatImageMime = file.type || 'image/jpeg';
+                    chatImageName = file.name || 'receipt.jpg';
+                    if (imageThumbnail) imageThumbnail.src = chatImageBase64;
+                    if (imageNameEl) imageNameEl.textContent = chatImageName;
                     imagePreviewBar?.classList.remove('hidden');
                     imagePreviewBar?.classList.add('flex');
                 };
@@ -1899,195 +1847,58 @@
             btnRemoveImage?.addEventListener('click', () => {
                 chatImageBase64 = null;
                 chatImageName = '';
-                chatAudioFileBase64 = null;
-                chatAudioFileName = '';
                 if (fileInput) fileInput.value = '';
                 imagePreviewBar?.classList.add('hidden');
                 imagePreviewBar?.classList.remove('flex');
             });
 
-            // 🎙️ 錄音控制核心邏輯 (MediaRecorder)
-            async function startRecording() {
-                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                    showToast('GAS 瀏覽器沙盒限制 iframe 麥克風：請直接點選相機/檔案圖示 📂 上傳語音檔（.m4a/.mp3）辨識！', 'error');
-                    return;
-                }
-
-                try {
-                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                } catch (err) {
-                    showToast('GAS 內嵌沙盒限制即時錄音：請點擊迴紋針/相機 📂 直接上傳語音檔（.m4a/.mp3/錄音檔）即可由 Gemini 解析！', 'error');
-                    return;
-                }
-
-                audioChunks = [];
-                isCancelled = false;
-
-                let mimeType = 'audio/webm;codecs=opus';
-                if (typeof MediaRecorder !== 'undefined') {
-                    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-                        mimeType = 'audio/webm;codecs=opus';
-                    } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-                        mimeType = 'audio/webm';
-                    } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-                        mimeType = 'audio/mp4';
-                    } else if (MediaRecorder.isTypeSupported('audio/aac')) {
-                        mimeType = 'audio/aac';
-                    } else {
-                        mimeType = '';
-                    }
-                }
-
-                try {
-                    const options = mimeType ? { mimeType } : {};
-                    mediaRecorder = new MediaRecorder(audioStream, options);
-                    actualAudioMime = mediaRecorder.mimeType || mimeType || 'audio/webm';
-                } catch (e) {
-                    mediaRecorder = new MediaRecorder(audioStream);
-                    actualAudioMime = mediaRecorder.mimeType || 'audio/webm';
-                }
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data && event.data.size > 0) {
-                        audioChunks.push(event.data);
-                    }
+            // 麥克風原生音訊橋接
+            btnMic?.addEventListener('click', () => audioInput?.click());
+            audioInput?.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const audioBase64 = event.target.result;
+                    const mimeType = file.type || 'audio/mp4';
+                    handleSendChatMessage({ audioBase64, audioMime: mimeType, audioName: file.name });
                 };
-
-                mediaRecorder.onstop = () => {
-                    if (recordingTimer) clearInterval(recordingTimer);
-                    resetRecordingUi();
-
-                    if (isCancelled) {
-                        audioChunks = [];
-                        showToast('已取消錄音', 'info');
-                        return;
-                    }
-
-                    if (audioChunks.length === 0) {
-                        showToast('未錄到聲音內容', 'error');
-                        return;
-                    }
-
-                    const audioBlob = new Blob(audioChunks, { type: actualAudioMime });
-                    if (audioBlob.size < 100) {
-                        showToast('錄音長度過短，請再試一次', 'error');
-                        return;
-                    }
-
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                        const audioBase64 = reader.result;
-                        handleSendChatMessage({
-                            audioBase64: audioBase64,
-                            audioMime: actualAudioMime
-                        });
-                    };
-                    reader.readAsDataURL(audioBlob);
-                };
-
-                mediaRecorder.start(250);
-                isRecording = true;
-
-                // UI 更新為錄音進行中狀態
-                if (btnMic) {
-                    btnMic.className = "p-2 bg-rose-600 text-white rounded-xl shrink-0 transition-all animate-pulse hover:bg-rose-700 shadow-xs";
-                    btnMic.innerHTML = '<i data-lucide="square" class="w-5 h-5 fill-current"></i>';
-                    btnMic.title = "點擊結束錄音並發送";
-                }
-                if (recordingBanner) {
-                    recordingBanner.classList.remove('hidden');
-                    recordingBanner.classList.add('flex');
-                }
-
-                recordSeconds = 0;
-                updateTimerText();
-                recordingTimer = setInterval(() => {
-                    recordSeconds++;
-                    updateTimerText();
-                }, 1000);
-
-                lucide.createIcons();
-            }
-
-            function stopRecording(cancelled = false) {
-                if (!isRecording || !mediaRecorder) return;
-                isCancelled = cancelled;
-                isRecording = false;
-
-                if (mediaRecorder.state !== 'inactive') {
-                    mediaRecorder.stop();
-                }
-                if (audioStream) {
-                    audioStream.getTracks().forEach(track => track.stop());
-                    audioStream = null;
-                }
-            }
-
-            function resetRecordingUi() {
-                isRecording = false;
-                if (btnMic) {
-                    btnMic.className = "p-2 text-slate-500 hover:text-teal-700 rounded-xl shrink-0 transition-all";
-                    btnMic.innerHTML = '<i data-lucide="mic" class="w-5 h-5"></i>';
-                    btnMic.title = "語音記帳錄音";
-                }
-                if (recordingBanner) {
-                    recordingBanner.classList.add('hidden');
-                    recordingBanner.classList.remove('flex');
-                }
-                if (recordingTimer) {
-                    clearInterval(recordingTimer);
-                    recordingTimer = null;
-                }
-                lucide.createIcons();
-            }
-
-            function updateTimerText() {
-                if (!recordingTimerEl) return;
-                const m = String(Math.floor(recordSeconds / 60)).padStart(2, '0');
-                const s = String(recordSeconds % 60).padStart(2, '0');
-                recordingTimerEl.textContent = `● 錄音中 ${m}:${s}... 點擊結束`;
-            }
-
-            btnMic?.addEventListener('click', () => {
-                if (isRecording) {
-                    stopRecording(false);
-                } else {
-                    startRecording();
-                }
+                reader.readAsDataURL(file);
+                audioInput.value = '';
             });
 
-            btnCancelRecording?.addEventListener('click', () => {
-                stopRecording(true);
-            });
-
-            async function handleSendChatMessage(extraMedia = {}) {
+            async function handleSendChatMessage(audioPayload = null) {
                 const text = (chatTextInput?.value || '').trim();
                 const image = chatImageBase64;
                 const mime = chatImageMime;
-                const audio = extraMedia?.audioBase64 || chatAudioFileBase64 || null;
-                const audioMime = extraMedia?.audioMime || chatAudioFileMime || actualAudioMime || 'audio/webm';
 
-                if (!text && !image && !audio) return showToast('請先輸入文字、錄製語音或上傳照片', 'error');
+                let mediaBase64 = image;
+                let mediaMime = mime;
+                let userDisplayText = text;
+                let isAudio = false;
 
-                let displayUserText = text;
-                if (!displayUserText) {
-                    if (audio) displayUserText = '🎙️ [語音記帳音檔]';
-                    else if (image) displayUserText = '📸 [上傳發票照片]';
+                if (audioPayload && audioPayload.audioBase64) {
+                    mediaBase64 = audioPayload.audioBase64;
+                    mediaMime = audioPayload.audioMime || 'audio/mp4';
+                    isAudio = true;
+                    userDisplayText = text ? `🎤 ${text} [語音: ${audioPayload.audioName || '音訊檔'}]` : `🎤 [語音記帳: ${audioPayload.audioName || '錄音'}]`;
+                } else if (!text && image) {
+                    userDisplayText = '📸 [上傳發票照片]';
                 }
+
+                if (!text && !mediaBase64) return showToast('請先輸入文字、錄音或上傳照片', 'error');
 
                 chatMessages.push({
                     id: 'usr-' + Date.now(),
                     role: 'user',
                     time: new Date().toTimeString().slice(0, 5),
-                    text: displayUserText,
-                    image: image || null,
-                    audio: audio || null
+                    text: userDisplayText,
+                    image: (!isAudio && image) ? image : null,
+                    isAudio: isAudio
                 });
 
                 if (chatTextInput) chatTextInput.value = '';
                 chatImageBase64 = null;
-                chatAudioFileBase64 = null;
-                chatAudioFileName = '';
                 if (fileInput) fileInput.value = '';
                 imagePreviewBar?.classList.add('hidden');
                 imagePreviewBar?.classList.remove('flex');
@@ -2098,14 +1909,14 @@
                     role: 'ai',
                     time: new Date().toTimeString().slice(0, 5),
                     isLoading: true,
-                    text: audio ? 'Gemini 3.5 正在辨識語音記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
+                    text: isAudio ? 'Gemini 3.5 正在聆聽語音辨識記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
                     transactions: []
                 });
 
                 renderChatStream();
 
                 try {
-                    const res = await ApiService.callGeminiBookkeeper(text, image, mime, audio, audioMime);
+                    const res = await ApiService.callGeminiBookkeeper(text, mediaBase64, mediaMime);
                     const idx = chatMessages.findIndex(m => m.id === loadingMsgId);
                     if (idx !== -1) chatMessages.splice(idx, 1);
                     const parsed = res.parsedTransactions || [];
@@ -2147,14 +1958,8 @@
                 if (msg.role === 'user') {
                     return `
                     <div class="flex justify-end items-end gap-1.5">
-                        <div class="max-w-[85%] bg-teal-700 text-white rounded-2xl rounded-tr-xs p-3 shadow-2xs text-xs space-y-1.5">
-                            ${msg.image ? `<img src="${msg.image}" class="w-32 h-32 object-cover rounded-lg" alt="發票">` : ''}
-                            ${msg.audio ? `
-                            <div class="flex items-center gap-2 bg-teal-800/80 px-2.5 py-1.5 rounded-xl border border-teal-600/50">
-                                <i data-lucide="mic" class="w-4 h-4 text-teal-200 shrink-0"></i>
-                                <span class="text-[11px] font-medium text-teal-100 shrink-0">語音記帳</span>
-                                <audio src="${msg.audio}" controls class="h-6 w-36 sm:w-44 accent-teal-400"></audio>
-                            </div>` : ''}
+                        <div class="max-w-[85%] bg-teal-700 text-white rounded-2xl rounded-tr-xs p-3 shadow-2xs text-xs">
+                            ${msg.image ? `<img src="${msg.image}" class="w-32 h-32 object-cover rounded-lg mb-1.5" alt="發票">` : ''}
                             <div class="whitespace-pre-line leading-relaxed">${escapeHtml(msg.text)}</div>
                         </div>
                     </div>
