@@ -428,13 +428,28 @@
                         <button type="button" class="chat-prompt-chip shrink-0 bg-slate-100 hover:bg-teal-50 text-slate-700 px-2 py-0.5 rounded-lg border border-slate-200/80 text-[11px]">💰 接案收入 35000 元 永豐銀行</button>
                     </div>
 
+                    <!-- Recording Indicator Banner -->
+                    <div id="chat-recording-banner" class="hidden items-center justify-between gap-3 bg-rose-50 p-2.5 rounded-xl border border-rose-200">
+                        <div class="flex items-center gap-2 text-rose-700 text-xs font-semibold">
+                            <span class="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping"></span>
+                            <span id="chat-recording-timer">● 錄音中 00:00...</span>
+                            <span class="text-rose-500 font-normal text-[11px] hidden sm:inline">點擊紅色停止鈕結束並發送</span>
+                        </div>
+                        <button id="btn-cancel-recording" type="button" title="取消錄音" class="px-2 py-0.5 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-100 rounded-lg">
+                            取消
+                        </button>
+                    </div>
+
                     <!-- Streamlined Input Bar -->
                     <div class="flex items-end gap-1.5 bg-slate-50 focus-within:bg-white rounded-2xl p-1.5 border border-slate-200 focus-within:border-teal-600 transition-all">
                         <input type="file" id="chat-file-input" accept="image/*" class="hidden">
                         <button id="btn-chat-photo" type="button" title="拍照或上傳發票" class="p-2 text-slate-500 hover:text-teal-700 rounded-xl shrink-0">
                             <i data-lucide="camera" class="w-5 h-5"></i>
                         </button>
-                        <textarea id="chat-text-input" rows="1" placeholder="輸入消費（例：全聯 350 元 LINE Pay）或點相機上傳發票..." class="w-full bg-transparent border-0 focus:ring-0 text-slate-900 placeholder-slate-400 text-xs sm:text-sm py-1.5 px-1 resize-none outline-none max-h-24 leading-relaxed"></textarea>
+                        <textarea id="chat-text-input" rows="1" placeholder="輸入消費（例：全聯 350 元 LINE Pay）或點麥克風/相機..." class="w-full bg-transparent border-0 focus:ring-0 text-slate-900 placeholder-slate-400 text-xs sm:text-sm py-1.5 px-1 resize-none outline-none max-h-24 leading-relaxed"></textarea>
+                        <button id="btn-chat-mic" type="button" title="語音記帳錄音" class="p-2 text-slate-500 hover:text-teal-700 rounded-xl shrink-0 transition-all">
+                            <i data-lucide="mic" class="w-5 h-5"></i>
+                        </button>
                         <button id="btn-chat-send" type="button" title="發送記帳" class="p-2 bg-gradient-to-r from-teal-600 to-emerald-600 text-white rounded-xl shadow-xs shrink-0">
                             <i data-lucide="send" class="w-4 h-4"></i>
                         </button>
@@ -666,7 +681,409 @@
     <div id="toast-container" class="fixed bottom-4 right-4 left-4 sm:left-auto z-50 flex flex-col gap-2 pointer-events-none"></div>
 
     <script>
-        // State Management
+        // =========================================================================
+        // 🔌 Environment & API Service Layer (Adapter Pattern)
+        // =========================================================================
+        const isGasEnv = typeof google !== 'undefined' && Boolean(google?.script?.run);
+
+        const MOCK_STORAGE_KEYS = {
+            SHEET_DATA: 'MOCK_SHEET_DATA',
+            CUSTOM_SETTINGS: 'MOCK_CUSTOM_SETTINGS'
+        };
+
+        const DEFAULT_SETTINGS = {
+            accounts: ['現金', 'LINE Pay', 'LINE Bank', '郵局', '永豐銀行', '國泰世華', '玉山銀行', '悠遊卡', '街口支付', '台新Richart'],
+            categories: ['食', '衣', '住', '行', '育樂', '學習費用', '醫療/雜項', '收入', '投資', '初始資產', '代墊款', '代墊回收', '內部轉帳'],
+            currencies: ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD']
+        };
+
+        function getMockDefaultTransactions() {
+            const today = new Date().toISOString().split('T')[0];
+            return [
+                { id: 1, rowNumber: 2, date: today, time: "12:30", account: "LINE Pay", name: "日式豚骨拉麵", category: "食", currency: "TWD", amount: -280, note: "午餐" },
+                { id: 2, rowNumber: 3, date: today, time: "10:15", account: "悠遊卡", name: "捷運交通乘車", category: "行", currency: "TWD", amount: -35, note: "通勤" },
+                { id: 3, rowNumber: 4, date: today, time: "09:00", account: "永豐銀行", name: "專案接案收入", category: "收入", currency: "TWD", amount: 28000, note: "第一期款" },
+                { id: 4, rowNumber: 5, date: "2026-08-19", time: "19:40", account: "現金", name: "成田免稅伴手禮", category: "育樂", currency: "JPY", amount: -4500, note: "機場購買" },
+                { id: 5, rowNumber: 6, date: "2026-08-18", time: "14:20", account: "國泰世華", name: "伺服器託管訂閱", category: "學習費用", currency: "USD", amount: -20, note: "Cloud" }
+            ];
+        }
+
+        const mockDelay = (ms = 150) => new Promise(resolve => setTimeout(resolve, ms));
+
+        const LocalStorageAdapter = {
+            getSettings() {
+                const raw = localStorage.getItem(MOCK_STORAGE_KEYS.CUSTOM_SETTINGS);
+                if (raw) {
+                    try {
+                        const parsed = JSON.parse(raw);
+                        if (parsed && Array.isArray(parsed.accounts) && Array.isArray(parsed.categories)) {
+                            return parsed;
+                        }
+                    } catch (e) {}
+                }
+                localStorage.setItem(MOCK_STORAGE_KEYS.CUSTOM_SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+                return JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+            },
+            saveSettings(settings) {
+                localStorage.setItem(MOCK_STORAGE_KEYS.CUSTOM_SETTINGS, JSON.stringify(settings));
+            },
+            getData() {
+                const raw = localStorage.getItem(MOCK_STORAGE_KEYS.SHEET_DATA);
+                if (raw) {
+                    try {
+                        const parsed = JSON.parse(raw);
+                        if (Array.isArray(parsed)) return parsed;
+                    } catch (e) {}
+                }
+                const defaultData = getMockDefaultTransactions();
+                localStorage.setItem(MOCK_STORAGE_KEYS.SHEET_DATA, JSON.stringify(defaultData));
+                return defaultData;
+            },
+            saveData(data) {
+                localStorage.setItem(MOCK_STORAGE_KEYS.SHEET_DATA, JSON.stringify(data));
+            }
+        };
+
+        const ApiService = {
+            // 1. 取得所有記帳流水帳明細
+            getSheetData: () => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .getSheetData();
+                    });
+                }
+                return mockDelay().then(() => LocalStorageAdapter.getData());
+            },
+
+            // 2. 新增單筆交易紀錄
+            addTransaction: (item) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .addTransaction(item);
+                    });
+                }
+                return mockDelay().then(() => {
+                    const data = LocalStorageAdapter.getData();
+                    const newRowNumber = data.length > 0 ? Math.max(...data.map(d => Number(d.rowNumber) || 0)) + 1 : 2;
+                    const newItem = {
+                        id: Date.now(),
+                        rowNumber: newRowNumber,
+                        date: String(item.date || new Date().toISOString().split('T')[0]).trim(),
+                        time: String(item.time || new Date().toTimeString().slice(0, 5)).trim(),
+                        account: String(item.account || '現金').trim(),
+                        name: String(item.name || '未命名項目').trim(),
+                        category: String(item.category || '食').trim(),
+                        currency: String(item.currency || 'TWD').trim().toUpperCase(),
+                        amount: Number(item.amount) || 0,
+                        note: String(item.note || '').trim()
+                    };
+                    data.push(newItem);
+                    LocalStorageAdapter.saveData(data);
+                    return {
+                        success: true,
+                        message: "成功寫入記帳紀錄！",
+                        rowNumber: newRowNumber
+                    };
+                });
+            },
+
+            // 3. 批次新增交易紀錄
+            batchAddTransactions: (items) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .batchAddTransactions(items);
+                    });
+                }
+                return mockDelay().then(() => {
+                    const data = LocalStorageAdapter.getData();
+                    let startRow = data.length > 0 ? Math.max(...data.map(d => Number(d.rowNumber) || 0)) + 1 : 2;
+                    items.forEach((item, idx) => {
+                        data.push({
+                            id: Date.now() + idx,
+                            rowNumber: startRow + idx,
+                            date: String(item.date || new Date().toISOString().split('T')[0]).trim(),
+                            time: String(item.time || new Date().toTimeString().slice(0, 5)).trim(),
+                            account: String(item.account || '現金').trim(),
+                            name: String(item.name || '未命名項目').trim(),
+                            category: String(item.category || '食').trim(),
+                            currency: String(item.currency || 'TWD').trim().toUpperCase(),
+                            amount: Number(item.amount) || 0,
+                            note: String(item.note || '').trim()
+                        });
+                    });
+                    LocalStorageAdapter.saveData(data);
+                    return { success: true, count: items.length };
+                });
+            },
+
+            // 4. 更新特定資料列交易紀錄
+            updateTransaction: (rowNumber, updatedItem) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .updateTransaction(rowNumber, updatedItem);
+                    });
+                }
+                return mockDelay().then(() => {
+                    const data = LocalStorageAdapter.getData();
+                    const idx = data.findIndex(d => String(d.rowNumber) === String(rowNumber) || String(d.id) === String(rowNumber));
+                    if (idx === -1) throw new Error("找不到該筆資料列");
+                    data[idx] = {
+                        ...data[idx],
+                        date: String(updatedItem.date || '').trim(),
+                        time: String(updatedItem.time || '').trim(),
+                        account: String(updatedItem.account || '現金').trim(),
+                        name: String(updatedItem.name || '未命名項目').trim(),
+                        category: String(updatedItem.category || '食').trim(),
+                        currency: String(updatedItem.currency || 'TWD').trim().toUpperCase(),
+                        amount: Number(updatedItem.amount) || 0,
+                        note: String(updatedItem.note || '').trim()
+                    };
+                    LocalStorageAdapter.saveData(data);
+                    return { success: true, message: "成功更新紀錄！" };
+                });
+            },
+
+            // 5. 刪除單筆交易紀錄
+            deleteTransaction: (rowNumber) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .deleteTransaction(rowNumber);
+                    });
+                }
+                return mockDelay().then(() => {
+                    let data = LocalStorageAdapter.getData();
+                    const initialLen = data.length;
+                    data = data.filter(d => String(d.rowNumber) !== String(rowNumber) && String(d.id) !== String(rowNumber));
+                    if (data.length === initialLen) throw new Error("找不到該筆資料列");
+                    data.forEach((d, idx) => { d.rowNumber = idx + 2; });
+                    LocalStorageAdapter.saveData(data);
+                    return { success: true, message: "成功刪除紀錄！" };
+                });
+            },
+
+            // 6. 取得自訂設定（帳戶、分類、幣別清單）
+            getCustomSettings: () => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .getCustomSettings();
+                    });
+                }
+                return mockDelay().then(() => LocalStorageAdapter.getSettings());
+            },
+
+            // 7. 儲存自訂設定
+            saveCustomSettings: (settings) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .saveCustomSettings(settings);
+                    });
+                }
+                return mockDelay().then(() => {
+                    const current = LocalStorageAdapter.getSettings();
+                    const updated = {
+                        ...current,
+                        accounts: (settings.accounts || []).map(a => String(a).trim()).filter(Boolean),
+                        categories: (settings.categories || []).map(c => String(c).trim()).filter(Boolean)
+                    };
+                    LocalStorageAdapter.saveSettings(updated);
+                    return { success: true, message: "已成功儲存自訂設定！" };
+                });
+            },
+
+            // 8. 取得全球即時匯率
+            getExchangeRates: () => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .getExchangeRates();
+                    });
+                }
+                return (async () => {
+                    const fallback = {
+                        base: "TWD",
+                        updated: new Date().toISOString(),
+                        rates: { TWD: 1, USD: 0.03125, JPY: 4.65, KRW: 41.5, EUR: 0.0285, CNY: 0.225, GBP: 0.0245, HKD: 0.244, SGD: 0.0418, THB: 1.08, AUD: 0.0475 }
+                    };
+                    try {
+                        const res = await fetch("https://open.er-api.com/v6/latest/TWD");
+                        if (res.ok) {
+                            const json = await res.json();
+                            if (json && json.rates) {
+                                return {
+                                    base: "TWD",
+                                    updated: json.time_last_update_utc || new Date().toISOString(),
+                                    rates: json.rates
+                                };
+                            }
+                        }
+                    } catch (e) {}
+                    return fallback;
+                })();
+            },
+
+            // 9. 級聯刪除帳戶（同步清理設定與流水帳關聯資料）
+            deleteAccountCascade: (accountName) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .deleteAccountCascade(accountName);
+                    });
+                }
+                return mockDelay().then(() => {
+                    const targetAccount = String(accountName || "").trim();
+                    if (!targetAccount) throw new Error("未提供欲刪除的帳戶名稱");
+
+                    const settings = LocalStorageAdapter.getSettings();
+                    settings.accounts = (settings.accounts || []).filter(a => a !== targetAccount);
+                    LocalStorageAdapter.saveSettings(settings);
+
+                    let data = LocalStorageAdapter.getData();
+                    const originalCount = data.length;
+                    data = data.filter(d => (d.account || "").trim() !== targetAccount);
+                    const deletedCount = originalCount - data.length;
+                    data.forEach((d, idx) => { d.rowNumber = idx + 2; });
+                    LocalStorageAdapter.saveData(data);
+
+                    return {
+                        success: true,
+                        deletedCount: deletedCount,
+                        message: `已成功刪除帳戶「${targetAccount}」，並清除 ${deletedCount} 筆關聯記帳記錄！`
+                    };
+                });
+            },
+
+            // 10. 級聯刪除分類（同步清理設定與流水帳關聯資料）
+            deleteCategoryCascade: (categoryName) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .deleteCategoryCascade(categoryName);
+                    });
+                }
+                return mockDelay().then(() => {
+                    const targetCategory = String(categoryName || "").trim();
+                    if (!targetCategory) throw new Error("未提供欲刪除的分類名稱");
+
+                    const settings = LocalStorageAdapter.getSettings();
+                    settings.categories = (settings.categories || []).filter(c => c !== targetCategory);
+                    LocalStorageAdapter.saveSettings(settings);
+
+                    let data = LocalStorageAdapter.getData();
+                    const originalCount = data.length;
+                    data = data.filter(d => (d.category || "").trim() !== targetCategory);
+                    const deletedCount = originalCount - data.length;
+                    data.forEach((d, idx) => { d.rowNumber = idx + 2; });
+                    LocalStorageAdapter.saveData(data);
+
+                    return {
+                        success: true,
+                        deletedCount: deletedCount,
+                        message: `已成功刪除分類「${targetCategory}」，並清除 ${deletedCount} 筆關聯記帳記錄！`
+                    };
+                });
+            },
+
+            // 11. 調用 Gemini 智慧自然語言/多模態音訊與影像記帳解析
+            callGeminiBookkeeper: (userMessage, imageBase64, mimeType, audioBase64, audioMimeType) => {
+                if (isGasEnv) {
+                    return new Promise((resolve, reject) => {
+                        google.script.run
+                            .withSuccessHandler(resolve)
+                            .withFailureHandler(reject)
+                            .callGeminiBookkeeper(userMessage, imageBase64, mimeType, audioBase64, audioMimeType);
+                    });
+                }
+                return mockDelay(600).then(() => {
+                    const msg = (userMessage || '').trim();
+                    const today = new Date().toISOString().split('T')[0];
+                    const time = new Date().toTimeString().slice(0, 5);
+                    const settings = LocalStorageAdapter.getSettings();
+                    const defaultAcc = settings.accounts[0] || '現金';
+
+                    // 本地 Mock：若有音訊且無輸入文字，模擬「早餐 漢堡蛋 65 元 現金」
+                    let parsedName = msg || (audioBase64 ? '早餐 漢堡蛋' : (imageBase64 ? '照片辨識消費' : '語音記帳消費'));
+                    let parsedAmount = (audioBase64 && !msg) ? -65 : -150;
+                    let parsedCategory = '食';
+                    let parsedCurrency = 'TWD';
+                    let parsedAccount = defaultAcc;
+
+                    if (msg) {
+                        const numMatch = msg.match(/(\d+(?:\.\d+)?)/);
+                        if (numMatch) {
+                            const val = parseFloat(numMatch[1]);
+                            if (!isNaN(val)) parsedAmount = -Math.abs(val);
+                        }
+                        if (msg.includes('收入') || msg.includes('薪水') || msg.includes('獎金') || msg.includes('領錢') || msg.includes('退款') || msg.includes('配息')) {
+                            parsedAmount = Math.abs(parsedAmount);
+                            parsedCategory = '收入';
+                        } else if (msg.includes('拉麵') || msg.includes('午餐') || msg.includes('晚餐') || msg.includes('早餐') || msg.includes('咖啡') || msg.includes('吃') || msg.includes('便當') || msg.includes('漢堡')) {
+                            parsedCategory = '食';
+                        } else if (msg.includes('捷運') || msg.includes('公車') || msg.includes('高鐵') || msg.includes('計程車') || msg.includes('加油') || msg.includes('悠遊卡')) {
+                            parsedCategory = '行';
+                        } else if (msg.includes('衣服') || msg.includes('鞋') || msg.includes('買包')) {
+                            parsedCategory = '衣';
+                        } else if (msg.includes('電影') || msg.includes('遊戲') || msg.includes('玩') || msg.includes('展覽')) {
+                            parsedCategory = '育樂';
+                        } else if (msg.includes('書') || msg.includes('課程') || msg.includes('訂閱') || msg.includes('伺服器')) {
+                            parsedCategory = '學習費用';
+                        }
+
+                        if (msg.toLowerCase().includes('jpy') || msg.includes('日圓') || msg.includes('日幣')) parsedCurrency = 'JPY';
+                        else if (msg.toLowerCase().includes('usd') || msg.includes('美金') || msg.includes('美元')) parsedCurrency = 'USD';
+                        else if (msg.toLowerCase().includes('krw') || msg.includes('韓元')) parsedCurrency = 'KRW';
+                    }
+
+                    const prefix = audioBase64 ? '🎙️ [語音多模態辨識] ' : (imageBase64 ? '📸 [發票多模態辨識] ' : '');
+                    return {
+                        reply: `[本地開發環境 Mock] ${prefix}已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`,
+                        parsedTransactions: [
+                            {
+                                name: parsedName,
+                                amount: parsedAmount,
+                                currency: parsedCurrency,
+                                category: parsedCategory,
+                                account: parsedAccount,
+                                date: today,
+                                time: time,
+                                note: audioBase64 ? "本地端 Mock 語音記帳解析" : "本地端 Mock 智慧解析"
+                            }
+                        ]
+                    };
+                });
+            }
+        };
+        window.ApiService = ApiService;
+
+        // =========================================================================
+        // 📊 Application State Management
+        // =========================================================================
         let rawTransactions = [];
         let filteredTransactions = [];
         let exchangeRates = {
@@ -835,15 +1252,10 @@
 
         async function fetchExchangeRates() {
             try {
-                if (window.google && google.script && google.script.run) {
-                    google.script.run
-                        .withSuccessHandler(rates => {
-                            if (rates && rates.rates) {
-                                exchangeRates = rates;
-                                renderExchangeRatesStrip();
-                            }
-                        })
-                        .getExchangeRates();
+                const rates = await ApiService.getExchangeRates();
+                if (rates && rates.rates) {
+                    exchangeRates = rates;
+                    renderExchangeRatesStrip();
                 }
             } catch (err) {
                 renderExchangeRatesStrip();
@@ -872,54 +1284,26 @@
         }
 
         async function fetchCustomSettings() {
-            if (window.google && google.script && google.script.run) {
-                google.script.run
-                    .withSuccessHandler(settings => {
-                        if (settings) {
-                            customSettings = settings;
-                            populateSettingsOptions();
-                            renderSettingsModalLists();
-                        }
-                    })
-                    .withFailureHandler(err => {
-                        showToast('讀取試算表設定失敗: ' + err, 'error');
-                    })
-                    .getCustomSettings();
-            } else {
-                if (!customSettings.accounts || customSettings.accounts.length === 0) {
-                    customSettings.accounts = ['現金', 'LINE Pay', 'LINE Bank', '郵局', '永豐銀行', '國泰世華', '玉山銀行', '悠遊卡', '街口支付', '台新Richart'];
-                    customSettings.categories = ['食', '衣', '住', '行', '育樂', '學習費用', '醫療/雜項', '收入', '投資', '初始資產', '代墊款', '代墊回收', '內部轉帳'];
+            try {
+                const settings = await ApiService.getCustomSettings();
+                if (settings) {
+                    customSettings = settings;
+                    populateSettingsOptions();
+                    renderSettingsModalLists();
                 }
-                populateSettingsOptions();
-                renderSettingsModalLists();
+            } catch (err) {
+                showToast('讀取設定失敗: ' + (err.message || err), 'error');
             }
         }
 
         async function fetchTransactions() {
-            if (window.google && google.script && google.script.run) {
-                google.script.run
-                    .withSuccessHandler(data => {
-                        rawTransactions = Array.isArray(data) ? data : [];
-                        populateYearFilter();
-                        applyFiltersAndRecompute();
-                    })
-                    .withFailureHandler(err => {
-                        showToast('讀取試算表資料失敗: ' + err, 'error');
-                    })
-                    .getSheetData();
-            } else {
-                if (rawTransactions.length === 0) {
-                    const today = new Date().toISOString().split('T')[0];
-                    rawTransactions = [
-                        { id: 1, rowNumber: 2, date: today, time: "12:30", account: "LINE Pay", name: "日式豚骨拉麵", category: "食", currency: "TWD", amount: -280, note: "午餐" },
-                        { id: 2, rowNumber: 3, date: today, time: "10:15", account: "悠遊卡", name: "捷運交通乘車", category: "行", currency: "TWD", amount: -35, note: "通勤" },
-                        { id: 3, rowNumber: 4, date: today, time: "09:00", account: "永豐銀行", name: "專案接案收入", category: "收入", currency: "TWD", amount: 28000, note: "第一期款" },
-                        { id: 4, rowNumber: 5, date: "2026-08-19", time: "19:40", account: "現金", name: "成田免稅伴手禮", category: "育樂", currency: "JPY", amount: -4500, note: "機場購買" },
-                        { id: 5, rowNumber: 6, date: "2026-08-18", time: "14:20", account: "國泰世華", name: "伺服器託管訂閱", category: "學習費用", currency: "USD", amount: -20, note: "Cloud" }
-                    ];
-                }
+            try {
+                const data = await ApiService.getSheetData();
+                rawTransactions = Array.isArray(data) ? data : [];
                 populateYearFilter();
                 applyFiltersAndRecompute();
+            } catch (err) {
+                showToast('讀取流水帳失敗: ' + (err.message || err), 'error');
             }
         }
 
@@ -977,7 +1361,7 @@
             lucide.createIcons();
         }
 
-        window.removeAccountSetting = function(idx) {
+        window.removeAccountSetting = async function(idx) {
             if (customSettings.accounts.length <= 1) return showToast('至少需保留 1 個帳戶', 'error');
             const accountName = customSettings.accounts[idx];
             if (!accountName) return;
@@ -985,33 +1369,18 @@
             const confirmed = confirm('刪除此項目將會一併清除後端所有包含該帳戶/分類的流水帳歷史記錄，確定刪除？');
             if (!confirmed) return;
 
-            if (window.google && google.script && google.script.run) {
-                showToast(`正在刪除帳戶「${accountName}」及關聯歷史記錄...`, 'info');
-                google.script.run
-                    .withSuccessHandler((res) => {
-                        customSettings.accounts.splice(idx, 1);
-                        renderSettingsModalLists();
-                        populateSettingsOptions();
-                        fetchCustomSettings();
-                        fetchTransactions();
-                        showToast(res?.message || `已成功刪除帳戶「${accountName}」並完成級聯清理！`, 'success');
-                    })
-                    .withFailureHandler((err) => {
-                        showToast('級聯刪除失敗: ' + err, 'error');
-                    })
-                    .deleteAccountCascade(accountName);
-            } else {
-                // 本地預覽模式級聯清理
-                customSettings.accounts.splice(idx, 1);
-                rawTransactions = rawTransactions.filter(t => (t.account || '').trim() !== accountName.trim());
-                renderSettingsModalLists();
-                populateSettingsOptions();
-                applyFiltersAndRecompute();
-                showToast(`已刪除帳戶「${accountName}」及關聯流水帳歷史記錄！`, 'success');
+            showToast(`正在刪除帳戶「${accountName}」及關聯歷史記錄...`, 'info');
+            try {
+                const res = await ApiService.deleteAccountCascade(accountName);
+                await fetchCustomSettings();
+                await fetchTransactions();
+                showToast(res?.message || `已成功刪除帳戶「${accountName}」並完成級聯清理！`, 'success');
+            } catch (err) {
+                showToast('級聯刪除失敗: ' + (err.message || err), 'error');
             }
         };
 
-        window.removeCategorySetting = function(idx) {
+        window.removeCategorySetting = async function(idx) {
             if (customSettings.categories.length <= 1) return showToast('至少需保留 1 個分類', 'error');
             const categoryName = customSettings.categories[idx];
             if (!categoryName) return;
@@ -1019,29 +1388,14 @@
             const confirmed = confirm('刪除此項目將會一併清除後端所有包含該帳戶/分類的流水帳歷史記錄，確定刪除？');
             if (!confirmed) return;
 
-            if (window.google && google.script && google.script.run) {
-                showToast(`正在刪除分類「${categoryName}」及關聯歷史記錄...`, 'info');
-                google.script.run
-                    .withSuccessHandler((res) => {
-                        customSettings.categories.splice(idx, 1);
-                        renderSettingsModalLists();
-                        populateSettingsOptions();
-                        fetchCustomSettings();
-                        fetchTransactions();
-                        showToast(res?.message || `已成功刪除分類「${categoryName}」並完成級聯清理！`, 'success');
-                    })
-                    .withFailureHandler((err) => {
-                        showToast('級聯刪除失敗: ' + err, 'error');
-                    })
-                    .deleteCategoryCascade(categoryName);
-            } else {
-                // 本地預覽模式級聯清理
-                customSettings.categories.splice(idx, 1);
-                rawTransactions = rawTransactions.filter(t => (t.category || '').trim() !== categoryName.trim());
-                renderSettingsModalLists();
-                populateSettingsOptions();
-                applyFiltersAndRecompute();
-                showToast(`已刪除分類「${categoryName}」及關聯流水帳歷史記錄！`, 'success');
+            showToast(`正在刪除分類「${categoryName}」及關聯歷史記錄...`, 'info');
+            try {
+                const res = await ApiService.deleteCategoryCascade(categoryName);
+                await fetchCustomSettings();
+                await fetchTransactions();
+                showToast(res?.message || `已成功刪除分類「${categoryName}」並完成級聯清理！`, 'success');
+            } catch (err) {
+                showToast('級聯刪除失敗: ' + (err.message || err), 'error');
             }
         };
 
@@ -1076,7 +1430,7 @@
                 if (e.key === 'Enter') { e.preventDefault(); handleAddCategory(); }
             });
 
-            document.getElementById('btn-save-settings')?.addEventListener('click', () => {
+            document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
                 const btn = document.getElementById('btn-save-settings');
                 const originalHtml = btn ? btn.innerHTML : '儲存設定';
 
@@ -1086,20 +1440,16 @@
                     lucide.createIcons();
                 }
 
-                if (window.google && google.script && google.script.run) {
-                    google.script.run
-                        .withSuccessHandler(res => {
-                            if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
-                            populateSettingsOptions();
-                            closeModal(document.getElementById('settings-modal'));
-                            applyFiltersAndRecompute();
-                            showToast('已成功儲存自訂帳戶與分類設定至試算表！', 'success');
-                        })
-                        .withFailureHandler(err => {
-                            if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
-                            showToast('儲存設定失敗: ' + err, 'error');
-                        })
-                        .saveCustomSettings(customSettings);
+                try {
+                    const res = await ApiService.saveCustomSettings(customSettings);
+                    populateSettingsOptions();
+                    closeModal(document.getElementById('settings-modal'));
+                    applyFiltersAndRecompute();
+                    showToast(res?.message || '已成功儲存自訂帳戶與分類設定！', 'success');
+                } catch (err) {
+                    showToast('儲存設定失敗: ' + (err.message || err), 'error');
+                } finally {
+                    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; lucide.createIcons(); }
                 }
             });
         }
@@ -1137,7 +1487,7 @@
             document.getElementById('btn-refresh')?.addEventListener('click', async () => {
                 await fetchExchangeRates();
                 await fetchTransactions();
-                showToast('已從 Google 試算表同步最新資料', 'success');
+                showToast('已同步最新資料', 'success');
             });
         }
 
@@ -1351,7 +1701,7 @@
                 });
             });
 
-            document.getElementById('form-manual-add')?.addEventListener('submit', (e) => {
+            document.getElementById('form-manual-add')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const newItem = {
                     date: document.getElementById('add-date')?.value || '',
@@ -1363,26 +1713,17 @@
                     amount: parseFloat(document.getElementById('add-amount')?.value) || 0,
                     note: document.getElementById('add-note')?.value || ''
                 };
-                if (window.google && google.script && google.script.run) {
-                    google.script.run
-                        .withSuccessHandler(() => {
-                            showToast('已成功寫入 Google 試算表！', 'success');
-                            closeModal(document.getElementById('manual-modal'));
-                            fetchTransactions();
-                        })
-                        .withFailureHandler(err => showToast('新增失敗: ' + err, 'error'))
-                        .addTransaction(newItem);
-                } else {
-                    newItem.id = Date.now();
-                    newItem.rowNumber = rawTransactions.length + 2;
-                    rawTransactions.unshift(newItem);
-                    applyFiltersAndRecompute();
+                try {
+                    const res = await ApiService.addTransaction(newItem);
+                    showToast(res?.message || '已成功新增記帳紀錄！', 'success');
                     closeModal(document.getElementById('manual-modal'));
-                    showToast('已成功新增記帳紀錄！', 'success');
+                    await fetchTransactions();
+                } catch (err) {
+                    showToast('新增失敗: ' + (err.message || err), 'error');
                 }
             });
 
-            document.getElementById('form-edit-transaction')?.addEventListener('submit', (e) => {
+            document.getElementById('form-edit-transaction')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const id = document.getElementById('edit-id')?.value;
                 const updatedItem = {
@@ -1395,23 +1736,13 @@
                     amount: parseFloat(document.getElementById('edit-amount')?.value) || 0,
                     note: document.getElementById('edit-note')?.value || ''
                 };
-                if (window.google && google.script && google.script.run) {
-                    google.script.run
-                        .withSuccessHandler(() => {
-                            showToast('已成功更新試算表紀錄！', 'success');
-                            closeModal(document.getElementById('edit-modal'));
-                            fetchTransactions();
-                        })
-                        .withFailureHandler(err => showToast('更新失敗: ' + err, 'error'))
-                        .updateTransaction(id, updatedItem);
-                } else {
-                    const idx = rawTransactions.findIndex(t => String(t.id || t.rowNumber) === String(id));
-                    if (idx !== -1) {
-                        rawTransactions[idx] = { ...rawTransactions[idx], ...updatedItem };
-                        applyFiltersAndRecompute();
-                    }
+                try {
+                    const res = await ApiService.updateTransaction(id, updatedItem);
+                    showToast(res?.message || '已成功更新紀錄！', 'success');
                     closeModal(document.getElementById('edit-modal'));
-                    showToast('已成功更新記帳紀錄！', 'success');
+                    await fetchTransactions();
+                } catch (err) {
+                    showToast('更新失敗: ' + (err.message || err), 'error');
                 }
             });
         }
@@ -1435,22 +1766,19 @@
             openModal(document.getElementById('edit-modal'));
         };
 
-        window.deleteTransactionItem = function(id) {
+        window.deleteTransactionItem = async function(id) {
             if (!confirm('確定要從試算表刪除此筆記帳明細嗎？')) return;
-            if (window.google && google.script && google.script.run) {
-                google.script.run
-                    .withSuccessHandler(() => { showToast('已從試算表刪除明細', 'success'); fetchTransactions(); })
-                    .withFailureHandler(err => showToast('刪除失敗: ' + err, 'error'))
-                    .deleteTransaction(id);
-            } else {
-                rawTransactions = rawTransactions.filter(t => String(t.id || t.rowNumber) !== String(id));
-                applyFiltersAndRecompute();
-                showToast('已刪除記帳明細', 'success');
+            try {
+                const res = await ApiService.deleteTransaction(id);
+                showToast(res?.message || '已成功刪除記帳明細', 'success');
+                await fetchTransactions();
+            } catch (err) {
+                showToast('刪除失敗: ' + (err.message || err), 'error');
             }
         };
 
         // ==========================================
-        // 🔒 AI 記帳模組：直連 Google 試算表 + 防重複寫入鎖定
+        // 🔒 AI 記帳模組：ApiService 封裝 + 防重複寫入鎖定
         // ==========================================
         let chatImageBase64 = null;
         let chatImageMime = 'image/jpeg';
@@ -1461,7 +1789,7 @@
                 id: 'welcome-msg',
                 role: 'ai',
                 time: new Date().toTimeString().slice(0, 5),
-                text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字或上傳發票收據照片，確認後即可一鍵寫入試算表！',
+                text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字、錄製語音或上傳發票照片，確認後即可一鍵寫入試算表！',
                 transactions: []
             }
         ];
@@ -1470,12 +1798,26 @@
             const chatTextInput = document.getElementById('chat-text-input');
             const btnSend = document.getElementById('btn-chat-send');
             const btnPhoto = document.getElementById('btn-chat-photo');
+            const btnMic = document.getElementById('btn-chat-mic');
             const fileInput = document.getElementById('chat-file-input');
             const imagePreviewBar = document.getElementById('chat-image-preview-bar');
             const imageThumbnail = document.getElementById('chat-image-thumbnail');
             const imageNameEl = document.getElementById('chat-image-name');
             const btnRemoveImage = document.getElementById('btn-remove-chat-image');
             const btnClearChat = document.getElementById('btn-clear-chat-stream');
+            const recordingBanner = document.getElementById('chat-recording-banner');
+            const recordingTimerEl = document.getElementById('chat-recording-timer');
+            const btnCancelRecording = document.getElementById('btn-cancel-recording');
+
+            // 🎙️ 錄音狀態變數
+            let mediaRecorder = null;
+            let audioChunks = [];
+            let audioStream = null;
+            let isRecording = false;
+            let recordingTimer = null;
+            let recordSeconds = 0;
+            let actualAudioMime = 'audio/webm';
+            let isCancelled = false;
 
             renderChatStream();
 
@@ -1509,7 +1851,7 @@
                 }
             });
 
-            btnSend?.addEventListener('click', handleSendChatMessage);
+            btnSend?.addEventListener('click', () => handleSendChatMessage());
 
             btnPhoto?.addEventListener('click', () => fileInput?.click());
             fileInput?.addEventListener('change', (e) => {
@@ -1536,19 +1878,182 @@
                 imagePreviewBar?.classList.remove('flex');
             });
 
-            async function handleSendChatMessage() {
+            // 🎙️ 錄音控制核心邏輯 (MediaRecorder)
+            async function startRecording() {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    showToast('瀏覽器不支援錄音或需在 HTTPS / localhost 安全連線下執行', 'error');
+                    return;
+                }
+
+                try {
+                    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                } catch (err) {
+                    showToast('無法存取麥克風，請檢查瀏覽器權限設定: ' + (err.message || err), 'error');
+                    return;
+                }
+
+                audioChunks = [];
+                isCancelled = false;
+
+                let mimeType = 'audio/webm;codecs=opus';
+                if (typeof MediaRecorder !== 'undefined') {
+                    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+                        mimeType = 'audio/webm;codecs=opus';
+                    } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+                        mimeType = 'audio/webm';
+                    } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+                        mimeType = 'audio/mp4';
+                    } else if (MediaRecorder.isTypeSupported('audio/aac')) {
+                        mimeType = 'audio/aac';
+                    } else {
+                        mimeType = '';
+                    }
+                }
+
+                try {
+                    const options = mimeType ? { mimeType } : {};
+                    mediaRecorder = new MediaRecorder(audioStream, options);
+                    actualAudioMime = mediaRecorder.mimeType || mimeType || 'audio/webm';
+                } catch (e) {
+                    mediaRecorder = new MediaRecorder(audioStream);
+                    actualAudioMime = mediaRecorder.mimeType || 'audio/webm';
+                }
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    if (recordingTimer) clearInterval(recordingTimer);
+                    resetRecordingUi();
+
+                    if (isCancelled) {
+                        audioChunks = [];
+                        showToast('已取消錄音', 'info');
+                        return;
+                    }
+
+                    if (audioChunks.length === 0) {
+                        showToast('未錄到聲音內容', 'error');
+                        return;
+                    }
+
+                    const audioBlob = new Blob(audioChunks, { type: actualAudioMime });
+                    if (audioBlob.size < 100) {
+                        showToast('錄音長度過短，請再試一次', 'error');
+                        return;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const audioBase64 = reader.result;
+                        handleSendChatMessage({
+                            audioBase64: audioBase64,
+                            audioMime: actualAudioMime
+                        });
+                    };
+                    reader.readAsDataURL(audioBlob);
+                };
+
+                mediaRecorder.start(250);
+                isRecording = true;
+
+                // UI 更新為錄音進行中狀態
+                if (btnMic) {
+                    btnMic.className = "p-2 bg-rose-600 text-white rounded-xl shrink-0 transition-all animate-pulse hover:bg-rose-700 shadow-xs";
+                    btnMic.innerHTML = '<i data-lucide="square" class="w-5 h-5 fill-current"></i>';
+                    btnMic.title = "點擊結束錄音並發送";
+                }
+                if (recordingBanner) {
+                    recordingBanner.classList.remove('hidden');
+                    recordingBanner.classList.add('flex');
+                }
+
+                recordSeconds = 0;
+                updateTimerText();
+                recordingTimer = setInterval(() => {
+                    recordSeconds++;
+                    updateTimerText();
+                }, 1000);
+
+                lucide.createIcons();
+            }
+
+            function stopRecording(cancelled = false) {
+                if (!isRecording || !mediaRecorder) return;
+                isCancelled = cancelled;
+                isRecording = false;
+
+                if (mediaRecorder.state !== 'inactive') {
+                    mediaRecorder.stop();
+                }
+                if (audioStream) {
+                    audioStream.getTracks().forEach(track => track.stop());
+                    audioStream = null;
+                }
+            }
+
+            function resetRecordingUi() {
+                isRecording = false;
+                if (btnMic) {
+                    btnMic.className = "p-2 text-slate-500 hover:text-teal-700 rounded-xl shrink-0 transition-all";
+                    btnMic.innerHTML = '<i data-lucide="mic" class="w-5 h-5"></i>';
+                    btnMic.title = "語音記帳錄音";
+                }
+                if (recordingBanner) {
+                    recordingBanner.classList.add('hidden');
+                    recordingBanner.classList.remove('flex');
+                }
+                if (recordingTimer) {
+                    clearInterval(recordingTimer);
+                    recordingTimer = null;
+                }
+                lucide.createIcons();
+            }
+
+            function updateTimerText() {
+                if (!recordingTimerEl) return;
+                const m = String(Math.floor(recordSeconds / 60)).padStart(2, '0');
+                const s = String(recordSeconds % 60).padStart(2, '0');
+                recordingTimerEl.textContent = `● 錄音中 ${m}:${s}... 點擊結束`;
+            }
+
+            btnMic?.addEventListener('click', () => {
+                if (isRecording) {
+                    stopRecording(false);
+                } else {
+                    startRecording();
+                }
+            });
+
+            btnCancelRecording?.addEventListener('click', () => {
+                stopRecording(true);
+            });
+
+            async function handleSendChatMessage(extraMedia = {}) {
                 const text = (chatTextInput?.value || '').trim();
                 const image = chatImageBase64;
                 const mime = chatImageMime;
+                const audio = extraMedia?.audioBase64 || null;
+                const audioMime = extraMedia?.audioMime || actualAudioMime || 'audio/webm';
 
-                if (!text && !image) return showToast('請先輸入文字或上傳照片', 'error');
+                if (!text && !image && !audio) return showToast('請先輸入文字、錄製語音或上傳照片', 'error');
+
+                let displayUserText = text;
+                if (!displayUserText) {
+                    if (audio) displayUserText = '🎙️ [語音記帳音檔]';
+                    else if (image) displayUserText = '📸 [上傳發票照片]';
+                }
 
                 chatMessages.push({
                     id: 'usr-' + Date.now(),
                     role: 'user',
                     time: new Date().toTimeString().slice(0, 5),
-                    text: text || '📸 [上傳發票照片]',
-                    image: image || null
+                    text: displayUserText,
+                    image: image || null,
+                    audio: audio || null
                 });
 
                 if (chatTextInput) chatTextInput.value = '';
@@ -1563,47 +2068,43 @@
                     role: 'ai',
                     time: new Date().toTimeString().slice(0, 5),
                     isLoading: true,
-                    text: 'Gemini 3.5 正在辨識記帳中...',
+                    text: audio ? 'Gemini 3.5 正在辨識語音記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
                     transactions: []
                 });
 
                 renderChatStream();
 
-                if (window.google && google.script && google.script.run) {
-                    google.script.run
-                        .withSuccessHandler(res => {
-                            const idx = chatMessages.findIndex(m => m.id === loadingMsgId);
-                            if (idx !== -1) chatMessages.splice(idx, 1);
-                            const parsed = res.parsedTransactions || [];
-                            const txsWithUid = parsed.map((t, i) => ({
-                                ...t,
-                                uid: 'tx-' + Date.now() + '-' + i,
-                                confirmed: false,
-                                isSubmitting: false,
-                                error: null
-                            }));
-                            chatMessages.push({
-                                id: 'ai-' + Date.now(),
-                                role: 'ai',
-                                time: new Date().toTimeString().slice(0, 5),
-                                text: res.reply || '已成功解析！請核對小卡並確認寫入：',
-                                transactions: txsWithUid
-                            });
-                            renderChatStream();
-                        })
-                        .withFailureHandler(err => {
-                            const idx = chatMessages.findIndex(m => m.id === loadingMsgId);
-                            if (idx !== -1) chatMessages.splice(idx, 1);
-                            chatMessages.push({
-                                id: 'ai-err-' + Date.now(),
-                                role: 'ai',
-                                time: new Date().toTimeString().slice(0, 5),
-                                text: '辨識時發生錯誤：' + err,
-                                transactions: []
-                            });
-                            renderChatStream();
-                        })
-                        .callGeminiBookkeeper(text, image, mime);
+                try {
+                    const res = await ApiService.callGeminiBookkeeper(text, image, mime, audio, audioMime);
+                    const idx = chatMessages.findIndex(m => m.id === loadingMsgId);
+                    if (idx !== -1) chatMessages.splice(idx, 1);
+                    const parsed = res.parsedTransactions || [];
+                    const txsWithUid = parsed.map((t, i) => ({
+                        ...t,
+                        uid: 'tx-' + Date.now() + '-' + i,
+                        confirmed: false,
+                        isSubmitting: false,
+                        error: null
+                    }));
+                    chatMessages.push({
+                        id: 'ai-' + Date.now(),
+                        role: 'ai',
+                        time: new Date().toTimeString().slice(0, 5),
+                        text: res.reply || '已成功解析！請核對小卡並確認寫入：',
+                        transactions: txsWithUid
+                    });
+                    renderChatStream();
+                } catch (err) {
+                    const idx = chatMessages.findIndex(m => m.id === loadingMsgId);
+                    if (idx !== -1) chatMessages.splice(idx, 1);
+                    chatMessages.push({
+                        id: 'ai-err-' + Date.now(),
+                        role: 'ai',
+                        time: new Date().toTimeString().slice(0, 5),
+                        text: '辨識時發生錯誤：' + (err.message || err),
+                        transactions: []
+                    });
+                    renderChatStream();
                 }
             }
         }
@@ -1616,8 +2117,14 @@
                 if (msg.role === 'user') {
                     return `
                     <div class="flex justify-end items-end gap-1.5">
-                        <div class="max-w-[85%] bg-teal-700 text-white rounded-2xl rounded-tr-xs p-3 shadow-2xs text-xs">
-                            ${msg.image ? `<img src="${msg.image}" class="w-32 h-32 object-cover rounded-lg mb-1.5" alt="發票">` : ''}
+                        <div class="max-w-[85%] bg-teal-700 text-white rounded-2xl rounded-tr-xs p-3 shadow-2xs text-xs space-y-1.5">
+                            ${msg.image ? `<img src="${msg.image}" class="w-32 h-32 object-cover rounded-lg" alt="發票">` : ''}
+                            ${msg.audio ? `
+                            <div class="flex items-center gap-2 bg-teal-800/80 px-2.5 py-1.5 rounded-xl border border-teal-600/50">
+                                <i data-lucide="mic" class="w-4 h-4 text-teal-200 shrink-0"></i>
+                                <span class="text-[11px] font-medium text-teal-100 shrink-0">語音記帳</span>
+                                <audio src="${msg.audio}" controls class="h-6 w-36 sm:w-44 accent-teal-400"></audio>
+                            </div>` : ''}
                             <div class="whitespace-pre-line leading-relaxed">${escapeHtml(msg.text)}</div>
                         </div>
                     </div>
@@ -1747,23 +2254,19 @@
                 note: targetTx.note || ''
             };
 
-            if (window.google && google.script && google.script.run) {
-                google.script.run
-                    .withSuccessHandler((res) => {
-                        targetTx.isSubmitting = false;
-                        targetTx.confirmed = true;
-                        targetTx.error = null;
-                        renderChatStream();
-                        showToast(`已成功寫入「${itemToSave.name}」至試算表！`, 'success');
-                        fetchTransactions();
-                    })
-                    .withFailureHandler((err) => {
-                        targetTx.isSubmitting = false;
-                        targetTx.error = (err && err.message) ? err.message : String(err);
-                        renderChatStream();
-                        showToast(`寫入失敗: ${targetTx.error}`, 'error');
-                    })
-                    .addTransaction(itemToSave);
+            try {
+                const res = await ApiService.addTransaction(itemToSave);
+                targetTx.isSubmitting = false;
+                targetTx.confirmed = true;
+                targetTx.error = null;
+                renderChatStream();
+                showToast(`已成功寫入「${itemToSave.name}」！`, 'success');
+                await fetchTransactions();
+            } catch (err) {
+                targetTx.isSubmitting = false;
+                targetTx.error = (err && err.message) ? err.message : String(err);
+                renderChatStream();
+                showToast(`寫入失敗: ${targetTx.error}`, 'error');
             }
         };
 
@@ -1775,7 +2278,7 @@
             amountInput?.addEventListener('input', updateManualViewConversionPreview);
             currencySelect?.addEventListener('change', updateManualViewConversionPreview);
 
-            form?.addEventListener('submit', (e) => {
+            form?.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const continuous = document.getElementById('manual-continuous-mode')?.checked;
                 const newItem = {
@@ -1789,22 +2292,20 @@
                     note: document.getElementById('manual-view-note').value.trim()
                 };
 
-                if (window.google && google.script && google.script.run) {
-                    google.script.run
-                        .withSuccessHandler(() => {
-                            showToast('成功寫入 Google 試算表！', 'success');
-                            if (continuous) {
-                                document.getElementById('manual-view-name').value = '';
-                                document.getElementById('manual-view-amount').value = '';
-                                document.getElementById('manual-view-note').value = '';
-                            } else {
-                                form.reset();
-                                switchView('dashboard');
-                            }
-                            fetchTransactions();
-                        })
-                        .withFailureHandler(err => showToast('寫入失敗: ' + err, 'error'))
-                        .addTransaction(newItem);
+                try {
+                    const res = await ApiService.addTransaction(newItem);
+                    showToast(res?.message || '成功寫入記帳紀錄！', 'success');
+                    if (continuous) {
+                        document.getElementById('manual-view-name').value = '';
+                        document.getElementById('manual-view-amount').value = '';
+                        document.getElementById('manual-view-note').value = '';
+                    } else {
+                        form.reset();
+                        switchView('dashboard');
+                    }
+                    await fetchTransactions();
+                } catch (err) {
+                    showToast('寫入失敗: ' + (err.message || err), 'error');
                 }
             });
         }

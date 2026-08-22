@@ -1,6 +1,0 @@
-{
-  "name": "Google Sheets 多幣別記帳與 AI 儀表板",
-  "description": "Google Apps Script 與 HTML5 智慧多幣別記帳系統，整合 Gemini AI 自然語言記帳、即時防連點寫入與財務分析儀表板。",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

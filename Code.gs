@@ -313,7 +313,7 @@ function promptSetApiKey() {
   }
 }
 
-function callGeminiBookkeeper(userMessage, imageBase64, mimeType, autoSave = false) {
+function callGeminiBookkeeper(userMessage, imageBase64, mimeType, audioBase64, audioMimeType) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
   if (!apiKey) return { reply: "⚠️ 尚未設定 GEMINI_API_KEY！請至試算表上方選單點選「設定/更新 Gemini API Key」。", parsedTransactions: [] };
 
@@ -324,11 +324,12 @@ Current Date: ${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "y
 Valid Categories: ${JSON.stringify(settings.categories)}.
 Valid Accounts: ${JSON.stringify(settings.accounts)}.
 
-CRITICAL AMOUNT SIGN RULES:
-1. ANY transaction representing money coming IN (e.g. Salary, dividend/配息, investment profit, cash gifts, refunds, repayment collected/代墊款歸還, selling assets, etc.) MUST have a POSITIVE amount (e.g. 5000).
-2. ANY transaction representing money going OUT (e.g. Buying food/clothes/goods, paying bills, travel expense, haircut, fees, subscription, etc.) MUST have a NEGATIVE amount (e.g. -150).
-3. For internal transfers, distinguish transfer-out as NEGATIVE and transfer-in as POSITIVE based on context.
-4. Do NOT rely solely on category names. Judge strictly by the financial nature of the action described by the user.
+CRITICAL AMOUNT SIGN & MULTIMODAL RULES:
+1. AUDIO RECOGNITION: 若有提供語音音檔，請直接聽取音訊中的語音內容，並依照記帳規則提取帳戶、金額、分類、項目名稱與正負號。
+2. ANY transaction representing money coming IN (e.g. Salary, dividend/配息, investment profit, cash gifts, refunds, repayment collected/代墊款歸還, selling assets, etc.) MUST have a POSITIVE amount (e.g. 5000).
+3. ANY transaction representing money going OUT (e.g. Buying food/clothes/goods, paying bills, travel expense, haircut, fees, subscription, etc.) MUST have a NEGATIVE amount (e.g. -150).
+4. For internal transfers, distinguish transfer-out as NEGATIVE and transfer-in as POSITIVE based on context.
+5. Do NOT rely solely on category names. Judge strictly by the financial nature of the action described by the user.
 
 Output JSON schema:
 {
@@ -349,9 +350,22 @@ Output JSON schema:
 
   const parts = [];
   if (imageBase64) {
-    parts.push({ inlineData: { data: imageBase64.replace(/^data:image\/\w+;base64,/, ""), mimeType: mimeType || "image/jpeg" } });
+    parts.push({ 
+      inlineData: { 
+        data: imageBase64.replace(/^data:image\/\w+;base64,/, ""), 
+        mimeType: mimeType || "image/jpeg" 
+      } 
+    });
   }
-  parts.push({ text: systemPrompt + "\n\nUser Input: " + (userMessage || "請辨識收據與消費內容") });
+  if (audioBase64) {
+    parts.push({
+      inlineData: {
+        data: audioBase64.replace(/^data:audio\/\w+;base64,/, ""),
+        mimeType: audioMimeType || "audio/webm"
+      }
+    });
+  }
+  parts.push({ text: systemPrompt + "\n\nUser Input: " + (userMessage || "請直接辨識所提供的語音或收據內容並進行記帳") });
 
   const payload = { 
     contents: [{ parts: parts }], 
