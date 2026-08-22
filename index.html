@@ -1888,7 +1888,12 @@
                 try {
                     audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 } catch (err) {
-                    showToast('無法存取麥克風，請檢查瀏覽器權限設定: ' + (err.message || err), 'error');
+                    const isPermissionDenied = err.name === 'NotAllowedError' || err.name === 'SecurityError';
+                    if (isPermissionDenied) {
+                        showToast('無法存取麥克風：若在試算表側邊欄內嵌環境受限，請改用「Web App 獨立網頁」開啟即可正常語音記帳！', 'error');
+                    } else {
+                        showToast('麥克風存取失敗: ' + (err.message || err.name), 'error');
+                    }
                     return;
                 }
 
