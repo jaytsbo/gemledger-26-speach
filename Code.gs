@@ -104,6 +104,17 @@ function initSettingsSheet() {
   safeAlert('✅ 成功初始化「系統設定」工作表！');
 }
 
+const CACHE_KEY_SHEET_DATA = 'CACHE_SHEET_DATA_V1';
+const CACHE_TTL_SECONDS = 1800; // 30 分鐘
+
+function clearSheetDataCache() {
+  try {
+    CacheService.getScriptCache().remove(CACHE_KEY_SHEET_DATA);
+  } catch (e) {
+    console.warn("快取清除失敗:", e);
+  }
+}
+
 function getCustomSettings() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const fallbackCurrencies = ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD'];
@@ -128,35 +139,53 @@ function getCustomSettings() {
 }
 
 function saveCustomSettings(settings) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) throw new Error("找不到試算表");
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
-  let sheet = ss.getSheetByName("系統設定") || ss.insertSheet("系統設定");
-  sheet.clear();
-  sheet.getRange(1, 1, 1, 2).setValues([["帳戶清單", "分類清單"]]).setBackground("#1e293b").setFontColor("#ffffff").setFontWeight("bold");
-  
-  const accounts = (settings.accounts || []).map(a => String(a).trim()).filter(Boolean);
-  const categories = (settings.categories || []).map(c => String(c).trim()).filter(Boolean);
-  const rows = [];
-  for (let i = 0; i < Math.max(accounts.length, categories.length); i++) {
-    rows.push([accounts[i] || "", categories[i] || ""]);
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("找不到試算表");
+
+    let sheet = ss.getSheetByName("系統設定") || ss.insertSheet("系統設定");
+    sheet.clear();
+    sheet.getRange(1, 1, 1, 2).setValues([["帳戶清單", "分類清單"]]).setBackground("#1e293b").setFontColor("#ffffff").setFontWeight("bold");
+    
+    const accounts = (settings.accounts || []).map(a => String(a).trim()).filter(Boolean);
+    const categories = (settings.categories || []).map(c => String(c).trim()).filter(Boolean);
+    const rows = [];
+    for (let i = 0; i < Math.max(accounts.length, categories.length); i++) {
+      rows.push([accounts[i] || "", categories[i] || ""]);
+    }
+    if (rows.length > 0) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
+    sheet.setFrozenRows(1);
+    return { success: true, message: "已成功儲存自訂設定！" };
+  } finally {
+    lock.releaseLock();
   }
-  if (rows.length > 0) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
-  sheet.setFrozenRows(1);
-  return { success: true, message: "已成功儲存自訂設定！" };
 }
 
 function getSheetData() {
+  const cache = CacheService.getScriptCache();
+  const cachedData = cache.get(CACHE_KEY_SHEET_DATA);
+  if (cachedData) {
+    try {
+      return JSON.parse(cachedData);
+    } catch (e) {
+      console.warn("快取解析失敗，重新讀取試算表");
+    }
+  }
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) return [];
   const sheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
-  const rows = sheet.getDataRange().getValues();
-  if (rows.length <= 1) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
 
+  const rows = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
   const data = [];
   const timeZone = Session.getScriptTimeZone();
 
-  for (let i = 1; i < rows.length; i++) {
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (!row[0] && !row[3]) continue;
 
@@ -164,8 +193,8 @@ function getSheetData() {
     let timeStr = row[1] instanceof Date ? Utilities.formatDate(row[1], timeZone, "HH:mm") : String(row[1] || "").slice(0, 5);
 
     data.push({
-      id: i + 1,
-      rowNumber: i + 1,
+      id: i + 2,
+      rowNumber: i + 2,
       date: String(dateStr || "").trim(),
       time: String(timeStr || "").trim(),
       account: String(row[2] || "現金").trim(),
@@ -176,11 +205,21 @@ function getSheetData() {
       note: String(row[7] || "").trim()
     });
   }
+
+  try {
+    cache.put(CACHE_KEY_SHEET_DATA, JSON.stringify(data), CACHE_TTL_SECONDS);
+  } catch (e) {
+    console.warn("資料超出 CacheService 100KB 單筆限制，略過寫入快取。");
+  }
+
   return data;
 }
 
 // 寫入交易：直接採用傳入數值，移除後端硬編碼正負號邏輯
 function addTransaction(item) {
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得試算表寫入鎖定）");
+
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error("找不到試算表");
@@ -204,6 +243,8 @@ function addTransaction(item) {
     sheet.appendRow(rowData);
     const newRowNumber = sheet.getLastRow();
 
+    clearSheetDataCache();
+
     return { 
       success: true, 
       message: "成功寫入記帳紀錄！", 
@@ -211,11 +252,16 @@ function addTransaction(item) {
     };
   } catch (error) {
     throw new Error("寫入試算表失敗: " + error.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 // 批次寫入交易：直接採用傳入數值，移除後端硬編碼正負號邏輯
 function batchAddTransactions(items) {
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得試算表寫入鎖定）");
+
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error("找不到試算表");
@@ -236,40 +282,59 @@ function batchAddTransactions(items) {
     if (rows.length > 0) {
       sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, 8).setValues(rows);
     }
+    clearSheetDataCache();
     return { success: true, count: rows.length };
   } catch (error) {
     throw new Error("批次寫入試算表失敗: " + error.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 function updateTransaction(rowNumber, updatedItem) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) throw new Error("找不到試算表");
-  const sheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
-  const rowIndex = Number(rowNumber);
-  if (!rowIndex || rowIndex < 2 || rowIndex > sheet.getLastRow()) throw new Error("無效的資料列編號");
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
-  sheet.getRange(rowIndex, 1, 1, 8).setValues([[
-    String(updatedItem.date || "").trim(),
-    String(updatedItem.time || "").trim(),
-    String(updatedItem.account || "現金").trim(),
-    String(updatedItem.name || "未命名項目").trim(),
-    String(updatedItem.category || "食").trim(),
-    String(updatedItem.currency || 'TWD').trim().toUpperCase(),
-    Number(updatedItem.amount) || 0,
-    String(updatedItem.note || "").trim()
-  ]]);
-  return { success: true, message: "成功更新紀錄！" };
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("找不到試算表");
+    const sheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
+    const rowIndex = Number(rowNumber);
+    if (!rowIndex || rowIndex < 2 || rowIndex > sheet.getLastRow()) throw new Error("無效的資料列編號");
+
+    sheet.getRange(rowIndex, 1, 1, 8).setValues([[
+      String(updatedItem.date || "").trim(),
+      String(updatedItem.time || "").trim(),
+      String(updatedItem.account || "現金").trim(),
+      String(updatedItem.name || "未命名項目").trim(),
+      String(updatedItem.category || "食").trim(),
+      String(updatedItem.currency || 'TWD').trim().toUpperCase(),
+      Number(updatedItem.amount) || 0,
+      String(updatedItem.note || "").trim()
+    ]]);
+    clearSheetDataCache();
+    return { success: true, message: "成功更新紀錄！" };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function deleteTransaction(rowNumber) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) throw new Error("找不到試算表");
-  const sheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
-  const rowIndex = Number(rowNumber);
-  if (!rowIndex || rowIndex < 2 || rowIndex > sheet.getLastRow()) throw new Error("無效的資料列編號");
-  sheet.deleteRow(rowIndex);
-  return { success: true, message: "成功刪除紀錄！" };
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (!ss) throw new Error("找不到試算表");
+    const sheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
+    const rowIndex = Number(rowNumber);
+    if (!rowIndex || rowIndex < 2 || rowIndex > sheet.getLastRow()) throw new Error("無效的資料列編號");
+    sheet.deleteRow(rowIndex);
+    clearSheetDataCache();
+    return { success: true, message: "成功刪除紀錄！" };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function getExchangeRates() {
@@ -389,9 +454,12 @@ Output JSON schema:
 }
 
 /**
- * 🗑️ 級聯刪除帳戶：同步刪除「系統設定」中的帳戶，並遍歷刪除「記帳資料」中所有包含該帳戶的列
+ * 🗑️ 級聯刪除帳戶：同步刪除「系統設定」中的帳戶，並批次清除「記帳資料」中所有包含該帳戶的列
  */
 function deleteAccountCascade(accountName) {
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+
   try {
     const targetAccount = String(accountName || "").trim();
     if (!targetAccount) throw new Error("未提供欲刪除的帳戶名稱");
@@ -422,20 +490,28 @@ function deleteAccountCascade(accountName) {
       settingsSheet.setFrozenRows(1);
     }
 
-    // 2. 從「記帳資料」工作表中逆向遍歷並刪除包含該帳戶的所有資料列
+    // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
     const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
     let deletedRowsCount = 0;
-    if (accountingSheet) {
-      const data = accountingSheet.getDataRange().getValues();
-      // 從最後一列往第二列逆向遍歷（避開標題列），防止列號偏移
-      for (let i = data.length - 1; i >= 1; i--) {
-        const rowAccount = String(data[i][2] || "").trim();
+    if (accountingSheet && accountingSheet.getLastRow() > 1) {
+      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
+      const remainingRows = allRows.filter(row => {
+        const rowAccount = String(row[2] || "").trim();
         if (rowAccount === targetAccount) {
-          accountingSheet.deleteRow(i + 1);
           deletedRowsCount++;
+          return false;
         }
+        return true;
+      });
+
+      // 清空原有資料列區域並批次寫回剩餘資料
+      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
+      if (remainingRows.length > 0) {
+        accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
       }
     }
+
+    clearSheetDataCache();
 
     return {
       success: true,
@@ -444,13 +520,18 @@ function deleteAccountCascade(accountName) {
     };
   } catch (error) {
     throw new Error("級聯刪除帳戶失敗: " + error.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 /**
- * 🗑️ 級聯刪除分類：同步刪除「系統設定」中的分類，並遍歷刪除「記帳資料」中所有包含該分類的列
+ * 🗑️ 級聯刪除分類：同步刪除「系統設定」中的分類，並批次清除「記帳資料」中所有包含該分類的列
  */
 function deleteCategoryCascade(categoryName) {
+  const lock = LockService.getScriptLock();
+  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+
   try {
     const targetCategory = String(categoryName || "").trim();
     if (!targetCategory) throw new Error("未提供欲刪除的分類名稱");
@@ -481,20 +562,28 @@ function deleteCategoryCascade(categoryName) {
       settingsSheet.setFrozenRows(1);
     }
 
-    // 2. 從「記帳資料」工作表中逆向遍歷並刪除包含該分類的所有資料列
+    // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
     const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
     let deletedRowsCount = 0;
-    if (accountingSheet) {
-      const data = accountingSheet.getDataRange().getValues();
-      // 從最後一列往第二列逆向遍歷（避開標題列），防止列號偏移
-      for (let i = data.length - 1; i >= 1; i--) {
-        const rowCategory = String(data[i][4] || "").trim();
+    if (accountingSheet && accountingSheet.getLastRow() > 1) {
+      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
+      const remainingRows = allRows.filter(row => {
+        const rowCategory = String(row[4] || "").trim();
         if (rowCategory === targetCategory) {
-          accountingSheet.deleteRow(i + 1);
           deletedRowsCount++;
+          return false;
         }
+        return true;
+      });
+
+      // 清空原有資料列區域並批次寫回剩餘資料
+      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
+      if (remainingRows.length > 0) {
+        accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
       }
     }
+
+    clearSheetDataCache();
 
     return {
       success: true,
@@ -503,5 +592,7 @@ function deleteCategoryCascade(categoryName) {
     };
   } catch (error) {
     throw new Error("級聯刪除分類失敗: " + error.message);
+  } finally {
+    lock.releaseLock();
   }
 }
