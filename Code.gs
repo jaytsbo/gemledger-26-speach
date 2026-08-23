@@ -140,7 +140,7 @@ function getCustomSettings() {
 
 function saveCustomSettings(settings) {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -218,7 +218,7 @@ function getSheetData() {
 // 寫入交易：直接採用傳入數值，移除後端硬編碼正負號邏輯
 function addTransaction(item) {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得試算表寫入鎖定）");
+  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得試算表寫入鎖定）");
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -260,7 +260,7 @@ function addTransaction(item) {
 // 批次寫入交易：直接採用傳入數值，移除後端硬編碼正負號邏輯
 function batchAddTransactions(items) {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得試算表寫入鎖定）");
+  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得試算表寫入鎖定）");
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -293,7 +293,7 @@ function batchAddTransactions(items) {
 
 function updateTransaction(rowNumber, updatedItem) {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -321,7 +321,7 @@ function updateTransaction(rowNumber, updatedItem) {
 
 function deleteTransaction(rowNumber) {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -458,7 +458,7 @@ Output JSON schema:
  */
 function deleteAccountCascade(accountName) {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
   try {
     const targetAccount = String(accountName || "").trim();
@@ -493,8 +493,9 @@ function deleteAccountCascade(accountName) {
     // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
     const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
     let deletedRowsCount = 0;
-    if (accountingSheet && accountingSheet.getLastRow() > 1) {
-      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
+    const lastRow = accountingSheet ? accountingSheet.getLastRow() : 0;
+    if (accountingSheet && lastRow > 1) {
+      const allRows = accountingSheet.getRange(2, 1, lastRow - 1, 8).getValues();
       const remainingRows = allRows.filter(row => {
         const rowAccount = String(row[2] || "").trim();
         if (rowAccount === targetAccount) {
@@ -505,12 +506,13 @@ function deleteAccountCascade(accountName) {
       });
 
       // 清空原有資料列區域並批次寫回剩餘資料
-      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
+      accountingSheet.getRange(2, 1, lastRow - 1, 8).clearContent();
       if (remainingRows.length > 0) {
         accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
       }
     }
 
+    SpreadsheetApp.flush();
     clearSheetDataCache();
 
     return {
@@ -530,7 +532,7 @@ function deleteAccountCascade(accountName) {
  */
 function deleteCategoryCascade(categoryName) {
   const lock = LockService.getScriptLock();
-  if (!lock.waitLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
+  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
   try {
     const targetCategory = String(categoryName || "").trim();
@@ -565,8 +567,9 @@ function deleteCategoryCascade(categoryName) {
     // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
     const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
     let deletedRowsCount = 0;
-    if (accountingSheet && accountingSheet.getLastRow() > 1) {
-      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
+    const lastRow = accountingSheet ? accountingSheet.getLastRow() : 0;
+    if (accountingSheet && lastRow > 1) {
+      const allRows = accountingSheet.getRange(2, 1, lastRow - 1, 8).getValues();
       const remainingRows = allRows.filter(row => {
         const rowCategory = String(row[4] || "").trim();
         if (rowCategory === targetCategory) {
@@ -577,12 +580,13 @@ function deleteCategoryCascade(categoryName) {
       });
 
       // 清空原有資料列區域並批次寫回剩餘資料
-      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
+      accountingSheet.getRange(2, 1, lastRow - 1, 8).clearContent();
       if (remainingRows.length > 0) {
         accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
       }
     }
 
+    SpreadsheetApp.flush();
     clearSheetDataCache();
 
     return {
