@@ -743,7 +743,9 @@
 
             // 1. 取得所有記帳流水帳明細
             getSheetData: (forceRefresh = false) => {
-                if (!forceRefresh && ApiService._memoryCache) {
+                if (forceRefresh) {
+                    ApiService.clearCache();
+                } else if (ApiService._memoryCache) {
                     return Promise.resolve(ApiService._memoryCache);
                 }
                 if (isGasEnv) {
@@ -1178,7 +1180,7 @@
 
             await fetchExchangeRates();
             await fetchCustomSettings();
-            await fetchTransactions();
+            await fetchTransactions(true);
         });
 
         function initSidebarDrawer() {
@@ -1305,7 +1307,7 @@
             }
         }
 
-        async function fetchTransactions(forceRefresh = false) {
+        async function fetchTransactions(forceRefresh = true) {
             try {
                 const data = await ApiService.getSheetData(forceRefresh);
                 rawTransactions = Array.isArray(data) ? data : [];
@@ -1494,11 +1496,18 @@
             });
 
             document.getElementById('btn-refresh')?.addEventListener('click', async () => {
-                ApiService.clearCache();
-                await fetchCustomSettings();
-                await fetchExchangeRates();
-                await fetchTransactions(true);
-                showToast('已同步最新資料與設定', 'success');
+                const icon = document.querySelector('#btn-refresh i');
+                if (icon) icon.classList.add('animate-spin');
+                try {
+                    await fetchExchangeRates();
+                    await fetchCustomSettings();
+                    await fetchTransactions(true);
+                    showToast('已強制同步最新試算表資料！', 'success');
+                } catch (e) {
+                    showToast('同步失敗: ' + (e.message || e), 'error');
+                } finally {
+                    if (icon) setTimeout(() => icon.classList.remove('animate-spin'), 600);
+                }
             });
         }
 
