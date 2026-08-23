@@ -754,7 +754,7 @@
                                 resolve(data);
                             })
                             .withFailureHandler(reject)
-                            .getSheetData();
+                            .getSheetData(forceRefresh);
                     });
                 }
                 return mockDelay().then(() => {
@@ -1305,9 +1305,9 @@
             }
         }
 
-        async function fetchTransactions() {
+        async function fetchTransactions(forceRefresh = false) {
             try {
-                const data = await ApiService.getSheetData();
+                const data = await ApiService.getSheetData(forceRefresh);
                 rawTransactions = Array.isArray(data) ? data : [];
                 populateYearFilter();
                 applyFiltersAndRecompute();
@@ -1494,9 +1494,11 @@
             });
 
             document.getElementById('btn-refresh')?.addEventListener('click', async () => {
+                ApiService.clearCache();
+                await fetchCustomSettings();
                 await fetchExchangeRates();
-                await fetchTransactions();
-                showToast('已同步最新資料', 'success');
+                await fetchTransactions(true);
+                showToast('已同步最新資料與設定', 'success');
             });
         }
 

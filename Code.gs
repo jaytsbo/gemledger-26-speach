@@ -41,12 +41,25 @@ function onOpen() {
     .addItem('🚀 開啟財務分析儀表板', 'openDashboardModal')
     .addItem('📱 開啟側邊欄智能記帳', 'openSidebar')
     .addSeparator()
+    .addItem('🔄 清除快取並強制同步試算表', 'syncSheetDataToast')
+    .addItem('💱 立即同步最新各國即時匯率', 'syncExchangeRatesToast')
+    .addSeparator()
     .addItem('⚙️ 初始化 8 欄位「記帳資料」工作表', 'initAccountingSheet')
     .addItem('⚙️ 初始化/重設「系統設定」工作表', 'initSettingsSheet')
-    .addSeparator()
     .addItem('🔑 設定/更新 Gemini API Key', 'promptSetApiKey')
-    .addItem('💱 立即同步最新各國即時匯率', 'syncExchangeRatesToast')
     .addToUi();
+}
+
+/**
+ * 試算表手動編輯或貼上時自動觸發：自動清除快取以維持資料即時性
+ */
+function onEdit(e) {
+  clearSheetDataCache();
+}
+
+function syncSheetDataToast() {
+  clearSheetDataCache();
+  safeToast('✅ 已強制清除快取，試算表資料已同步！', '快取同步', 3);
 }
 
 function openDashboardModal() {
@@ -105,7 +118,7 @@ function initSettingsSheet() {
 }
 
 const CACHE_KEY_SHEET_DATA = 'CACHE_SHEET_DATA_V1';
-const CACHE_TTL_SECONDS = 1800; // 30 分鐘
+const CACHE_TTL_SECONDS = 300; // 5 分鐘快取
 
 function clearSheetDataCache() {
   try {
@@ -164,14 +177,16 @@ function saveCustomSettings(settings) {
   }
 }
 
-function getSheetData() {
+function getSheetData(forceRefresh = false) {
   const cache = CacheService.getScriptCache();
-  const cachedData = cache.get(CACHE_KEY_SHEET_DATA);
-  if (cachedData) {
-    try {
-      return JSON.parse(cachedData);
-    } catch (e) {
-      console.warn("快取解析失敗，重新讀取試算表");
+  if (!forceRefresh) {
+    const cachedData = cache.get(CACHE_KEY_SHEET_DATA);
+    if (cachedData) {
+      try {
+        return JSON.parse(cachedData);
+      } catch (e) {
+        console.warn("快取解析失敗，重新讀取試算表");
+      }
     }
   }
 
@@ -493,9 +508,8 @@ function deleteAccountCascade(accountName) {
     // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
     const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
     let deletedRowsCount = 0;
-    const lastRow = accountingSheet ? accountingSheet.getLastRow() : 0;
-    if (accountingSheet && lastRow > 1) {
-      const allRows = accountingSheet.getRange(2, 1, lastRow - 1, 8).getValues();
+    if (accountingSheet && accountingSheet.getLastRow() > 1) {
+      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
       const remainingRows = allRows.filter(row => {
         const rowAccount = String(row[2] || "").trim();
         if (rowAccount === targetAccount) {
@@ -506,7 +520,7 @@ function deleteAccountCascade(accountName) {
       });
 
       // 清空原有資料列區域並批次寫回剩餘資料
-      accountingSheet.getRange(2, 1, lastRow - 1, 8).clearContent();
+      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
       if (remainingRows.length > 0) {
         accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
       }
@@ -567,9 +581,8 @@ function deleteCategoryCascade(categoryName) {
     // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
     const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
     let deletedRowsCount = 0;
-    const lastRow = accountingSheet ? accountingSheet.getLastRow() : 0;
-    if (accountingSheet && lastRow > 1) {
-      const allRows = accountingSheet.getRange(2, 1, lastRow - 1, 8).getValues();
+    if (accountingSheet && accountingSheet.getLastRow() > 1) {
+      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
       const remainingRows = allRows.filter(row => {
         const rowCategory = String(row[4] || "").trim();
         if (rowCategory === targetCategory) {
@@ -580,7 +593,7 @@ function deleteCategoryCascade(categoryName) {
       });
 
       // 清空原有資料列區域並批次寫回剩餘資料
-      accountingSheet.getRange(2, 1, lastRow - 1, 8).clearContent();
+      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
       if (remainingRows.length > 0) {
         accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
       }
