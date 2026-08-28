@@ -413,6 +413,43 @@ function callGeminiBookkeeper(userMessage, imageBase64, mimeType, autoSave = fal
   const currentDateStr = Utilities.formatDate(now, timeZone, "yyyy-MM-dd");
   const currentTimeStr = Utilities.formatDate(now, timeZone, "HH:mm");
   
+  let textInput = userMessage || "";
+  const isAudio = mimeType && mimeType.startsWith("audio/");
+
+  // 階段 1：若為語音，先經由 gemini-3.5-transcribe 轉寫成文字
+  if (isAudio && imageBase64) {
+    const audioPayload = {
+      contents: [{
+        parts: [
+          { inlineData: { data: imageBase64.replace(/^data:[^;]+;base64,/, ""), mimeType: mimeType } },
+          { text: "請將這段語音內容精確轉寫為繁體中文文字，不要加入額外解說。" }
+        ]
+      }],
+      generationConfig: { temperature: 0.1 }
+    };
+    const audioUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-transcribe:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+    
+    try {
+      const audioRes = UrlFetchApp.fetch(audioUrl, {
+        method: "post",
+        contentType: "application/json",
+        payload: JSON.stringify(audioPayload),
+        muteHttpExceptions: true
+      });
+
+      if (audioRes.getResponseCode() === 200) {
+        const audioJson = JSON.parse(audioRes.getContentText());
+        const transcribed = audioJson.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        textInput = (textInput ? textInput + "\n" : "") + transcribed;
+      } else {
+        return { reply: "⚠️ 語音轉寫失敗 (gemini-3.5-transcribe)：" + audioRes.getContentText(), parsedTransactions: [] };
+      }
+    } catch (err) {
+      return { reply: "⚠️ 語音轉寫錯誤：" + err.toString(), parsedTransactions: [] };
+    }
+  }
+
+  // 階段 2：使用 gemini-3.5-flash-lite 進行文字/圖片語意理解與記帳 JSON 解析
   const systemPrompt = `You are an expert multilingual financial bookkeeping assistant.
 Current Date: ${currentDateStr}.
 Current Time: ${currentTimeStr}.
@@ -447,25 +484,20 @@ Output JSON schema:
 }`;
 
   const parts = [];
-  if (imageBase64) {
+  if (imageBase64 && !isAudio) {
     parts.push({ inlineData: { data: imageBase64.replace(/^data:[^;]+;base64,/, ""), mimeType: mimeType || "image/jpeg" } });
   }
-  parts.push({ text: systemPrompt + "\n\nUser Input: " + (userMessage || "請辨識語音、收據與消費內容") });
-
-  const isAudio = mimeType && mimeType.startsWith("audio/");
-  const model = isAudio ? "gemini-3.5-transcribe" : "gemini-3.5-flash-lite";
-
-  const generationConfig = { temperature: 0.1 };
-  if (!isAudio) {
-    generationConfig.responseMimeType = "application/json";
-  }
+  parts.push({ text: systemPrompt + "\n\nUser Input: " + (textInput || "請辨識消費內容") });
 
   const payload = { 
     contents: [{ parts: parts }], 
-    generationConfig: generationConfig 
+    generationConfig: { 
+      responseMimeType: "application/json", 
+      temperature: 0.1 
+    } 
   };
   
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
   
   try {
     const res = UrlFetchApp.fetch(url, { 
@@ -488,9 +520,9 @@ Output JSON schema:
         parsedTransactions: txs 
       };
     }
-    return { reply: `⚠️ 調用 Gemini API (${model}) 發生錯誤：` + res.getContentText(), parsedTransactions: [] };
+    return { reply: `⚠️ 調用 Gemini API (gemini-3.5-flash-lite) 發生錯誤：` + res.getContentText(), parsedTransactions: [] };
   } catch (err) { 
-    return { reply: `⚠️ 調用 Gemini API (${model}) 發生錯誤：` + err.toString(), parsedTransactions: [] };
+    return { reply: `⚠️ 調用 Gemini API (gemini-3.5-flash-lite) 發生錯誤：` + err.toString(), parsedTransactions: [] };
   }
 }
 
