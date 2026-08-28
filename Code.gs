@@ -460,7 +460,8 @@ Output JSON schema:
     } 
   };
   
-  const model = "gemini-3.5-flash-lite";
+  const isAudio = mimeType && mimeType.startsWith("audio/");
+  const model = isAudio ? "gemini-3.5-transcribe" : "gemini-3.5-flash-lite";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
   
   try {
@@ -481,9 +482,9 @@ Output JSON schema:
         parsedTransactions: txs 
       };
     }
-    return { reply: "⚠️ 調用 Gemini API (gemini-3.5-flash-lite) 發生錯誤：" + res.getContentText(), parsedTransactions: [] };
+    return { reply: `⚠️ 調用 Gemini API (${model}) 發生錯誤：` + res.getContentText(), parsedTransactions: [] };
   } catch (err) { 
-    return { reply: "⚠️ 調用 Gemini API (gemini-3.5-flash-lite) 發生錯誤：" + err.toString(), parsedTransactions: [] };
+    return { reply: `⚠️ 調用 Gemini API (${model}) 發生錯誤：` + err.toString(), parsedTransactions: [] };
   }
 }
 

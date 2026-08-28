@@ -1073,7 +1073,9 @@
                     else if (msg.toLowerCase().includes('krw') || msg.includes('韓元')) parsedCurrency = 'KRW';
 
                     return {
-                        reply: `[本地開發環境 Mock] 已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`,
+                        reply: isAudio 
+                            ? `[本地 Mock - Gemini 3.5 Transcribe] 已成功轉譯語音「${parsedName}」！請核對小卡並確認寫入：`
+                            : `[本地 Mock - Gemini 3.5 Flash Lite] 已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`,
                         parsedTransactions: [
                             {
                                 name: parsedName,
@@ -1979,7 +1981,7 @@
                     role: 'ai',
                     time: new Date().toTimeString().slice(0, 5),
                     isLoading: true,
-                    text: isAudio ? 'Gemini 3.5 正在聆聽語音辨識記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
+                    text: isAudio ? 'Gemini 3.5 Transcribe 正在聆聽語音辨識記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
                     transactions: []
                 });
 
