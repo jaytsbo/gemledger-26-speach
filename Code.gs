@@ -262,7 +262,7 @@ function getSheetData(forceRefresh = false) {
 
   const rawRows = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
   const data = [];
-  const timeZone = Session.getScriptTimeZone();
+  const pad = (n) => String(n).padStart(2, '0');
 
   for (let i = 0; i < rawRows.length; i++) {
     const rRow = rawRows[i];
@@ -270,14 +270,14 @@ function getSheetData(forceRefresh = false) {
 
     let dateStr = "";
     if (rRow[0] instanceof Date) {
-      dateStr = Utilities.formatDate(rRow[0], timeZone, "yyyy-MM-dd");
+      dateStr = `${rRow[0].getFullYear()}-${pad(rRow[0].getMonth() + 1)}-${pad(rRow[0].getDate())}`;
     } else if (rRow[0]) {
       dateStr = String(rRow[0]).trim();
     }
 
     let timeStr = "";
     if (rRow[1] instanceof Date) {
-      timeStr = Utilities.formatDate(rRow[1], timeZone, "HH:mm");
+      timeStr = `${pad(rRow[1].getHours())}:${pad(rRow[1].getMinutes())}`;
     } else if (rRow[1]) {
       timeStr = String(rRow[1]).trim();
     }
