@@ -452,16 +452,19 @@ Output JSON schema:
   }
   parts.push({ text: systemPrompt + "\n\nUser Input: " + (userMessage || "請辨識語音、收據與消費內容") });
 
-  const payload = { 
-    contents: [{ parts: parts }], 
-    generationConfig: { 
-      responseMimeType: "application/json", 
-      temperature: 0.1 
-    } 
-  };
-  
   const isAudio = mimeType && mimeType.startsWith("audio/");
   const model = isAudio ? "gemini-3.5-transcribe" : "gemini-3.5-flash-lite";
+
+  const generationConfig = { temperature: 0.1 };
+  if (!isAudio) {
+    generationConfig.responseMimeType = "application/json";
+  }
+
+  const payload = { 
+    contents: [{ parts: parts }], 
+    generationConfig: generationConfig 
+  };
+  
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
   
   try {
@@ -474,7 +477,10 @@ Output JSON schema:
     
     if (res.getResponseCode() === 200) {
       const json = JSON.parse(res.getContentText());
-      const parsed = JSON.parse(json.candidates[0].content.parts[0].text);
+      let rawText = json.candidates[0].content.parts[0].text || "";
+      const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (jsonMatch) rawText = jsonMatch[1];
+      const parsed = JSON.parse(rawText);
       const txs = parsed.transactions || [];
 
       return { 
