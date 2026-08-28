@@ -120,12 +120,77 @@ function initSettingsSheet() {
 const CACHE_KEY_SHEET_DATA = 'CACHE_SHEET_DATA_V1';
 const CACHE_TTL_SECONDS = 300; // 5 分鐘快取
 
-function clearSheetDataCache() {
+function putLargeCache(key, dataArray, ttlSeconds) {
+  const cache = CacheService.getScriptCache();
   try {
-    CacheService.getScriptCache().remove(CACHE_KEY_SHEET_DATA);
+    const jsonStr = JSON.stringify(dataArray);
+    const chunkSize = 90 * 1024; // 90KB (safe under 100KB)
+    
+    if (jsonStr.length < chunkSize) {
+      cache.put(key, jsonStr, ttlSeconds);
+      cache.put(key + "_chunks", "1", ttlSeconds);
+      return;
+    }
+    
+    const numChunks = Math.ceil(jsonStr.length / chunkSize);
+    for (let i = 0; i < numChunks; i++) {
+      const chunk = jsonStr.substring(i * chunkSize, (i + 1) * chunkSize);
+      cache.put(key + "_part_" + i, chunk, ttlSeconds);
+    }
+    cache.put(key + "_chunks", String(numChunks), ttlSeconds);
   } catch (e) {
-    console.warn("快取清除失敗:", e);
+    console.warn("寫入分片快取失敗:", e);
   }
+}
+
+function getLargeCache(key) {
+  const cache = CacheService.getScriptCache();
+  try {
+    const chunksVal = cache.get(key + "_chunks");
+    if (!chunksVal) return null;
+    
+    const numChunks = parseInt(chunksVal, 10);
+    if (numChunks === 1) {
+      return cache.get(key);
+    }
+    
+    let jsonStr = "";
+    for (let i = 0; i < numChunks; i++) {
+      const chunk = cache.get(key + "_part_" + i);
+      if (!chunk) return null; // 碎片丟失，視為快取失效
+      jsonStr += chunk;
+    }
+    return jsonStr;
+  } catch (e) {
+    console.warn("讀取分片快取失敗:", e);
+    return null;
+  }
+}
+
+function clearLargeCache(key) {
+  const cache = CacheService.getScriptCache();
+  try {
+    const chunksVal = cache.get(key + "_chunks");
+    if (chunksVal) {
+      const numChunks = parseInt(chunksVal, 10);
+      if (numChunks === 1) {
+        cache.remove(key);
+      } else {
+        for (let i = 0; i < numChunks; i++) {
+          cache.remove(key + "_part_" + i);
+        }
+      }
+      cache.remove(key + "_chunks");
+    } else {
+      cache.remove(key);
+    }
+  } catch (e) {
+    console.warn("清除分片快取失敗:", e);
+  }
+}
+
+function clearSheetDataCache() {
+  clearLargeCache(CACHE_KEY_SHEET_DATA);
 }
 
 function getCustomSettings() {
@@ -178,9 +243,8 @@ function saveCustomSettings(settings) {
 }
 
 function getSheetData(forceRefresh = false) {
-  const cache = CacheService.getScriptCache();
   if (!forceRefresh) {
-    const cachedData = cache.get(CACHE_KEY_SHEET_DATA);
+    const cachedData = getLargeCache(CACHE_KEY_SHEET_DATA);
     if (cachedData) {
       try {
         return JSON.parse(cachedData);
@@ -196,24 +260,26 @@ function getSheetData(forceRefresh = false) {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
 
-  const displayRows = sheet.getRange(2, 1, lastRow - 1, 8).getDisplayValues();
   const rawRows = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
   const data = [];
   const timeZone = Session.getScriptTimeZone();
 
   for (let i = 0; i < rawRows.length; i++) {
     const rRow = rawRows[i];
-    const dRow = displayRows[i];
-    if (!rRow[0] && !rRow[3] && !dRow[0] && !dRow[3]) continue;
+    if (!rRow[0] && !rRow[3]) continue;
 
-    let dateStr = String(dRow[0] || '').trim();
-    if (!dateStr && rRow[0] instanceof Date) {
+    let dateStr = "";
+    if (rRow[0] instanceof Date) {
       dateStr = Utilities.formatDate(rRow[0], timeZone, "yyyy-MM-dd");
+    } else if (rRow[0]) {
+      dateStr = String(rRow[0]).trim();
     }
 
-    let timeStr = String(dRow[1] || '').trim();
-    if (!timeStr && rRow[1] instanceof Date) {
+    let timeStr = "";
+    if (rRow[1] instanceof Date) {
       timeStr = Utilities.formatDate(rRow[1], timeZone, "HH:mm");
+    } else if (rRow[1]) {
+      timeStr = String(rRow[1]).trim();
     }
     if (timeStr.length > 5) timeStr = timeStr.slice(0, 5);
 
@@ -222,20 +288,16 @@ function getSheetData(forceRefresh = false) {
       rowNumber: i + 2,
       date: String(dateStr || "").trim(),
       time: String(timeStr || "").trim(),
-      account: String(dRow[2] || rRow[2] || "現金").trim(),
-      name: String(dRow[3] || rRow[3] || "未命名項目").trim(),
-      category: String(dRow[4] || rRow[4] || "食").trim(),
-      currency: String(dRow[5] || rRow[5] || "TWD").trim().toUpperCase(),
+      account: String(rRow[2] || "現金").trim(),
+      name: String(rRow[3] || "未命名項目").trim(),
+      category: String(rRow[4] || "食").trim(),
+      currency: String(rRow[5] || "TWD").trim().toUpperCase(),
       amount: Number(rRow[6]) || 0,
-      note: String(dRow[7] || rRow[7] || "").trim()
+      note: String(rRow[7] || "").trim()
     });
   }
 
-  try {
-    cache.put(CACHE_KEY_SHEET_DATA, JSON.stringify(data), CACHE_TTL_SECONDS);
-  } catch (e) {
-    console.warn("資料超出 CacheService 100KB 單筆限制，略過寫入快取。");
-  }
+  putLargeCache(CACHE_KEY_SHEET_DATA, data, CACHE_TTL_SECONDS);
 
   return data;
 }
