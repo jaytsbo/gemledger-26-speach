@@ -196,28 +196,38 @@ function getSheetData(forceRefresh = false) {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
 
-  const rows = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  const displayRows = sheet.getRange(2, 1, lastRow - 1, 8).getDisplayValues();
+  const rawRows = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
   const data = [];
   const timeZone = Session.getScriptTimeZone();
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row[0] && !row[3]) continue;
+  for (let i = 0; i < rawRows.length; i++) {
+    const rRow = rawRows[i];
+    const dRow = displayRows[i];
+    if (!rRow[0] && !rRow[3] && !dRow[0] && !dRow[3]) continue;
 
-    let dateStr = row[0] instanceof Date ? Utilities.formatDate(row[0], timeZone, "yyyy-MM-dd") : row[0];
-    let timeStr = row[1] instanceof Date ? Utilities.formatDate(row[1], timeZone, "HH:mm") : String(row[1] || "").slice(0, 5);
+    let dateStr = String(dRow[0] || '').trim();
+    if (!dateStr && rRow[0] instanceof Date) {
+      dateStr = Utilities.formatDate(rRow[0], timeZone, "yyyy-MM-dd");
+    }
+
+    let timeStr = String(dRow[1] || '').trim();
+    if (!timeStr && rRow[1] instanceof Date) {
+      timeStr = Utilities.formatDate(rRow[1], timeZone, "HH:mm");
+    }
+    if (timeStr.length > 5) timeStr = timeStr.slice(0, 5);
 
     data.push({
       id: i + 2,
       rowNumber: i + 2,
       date: String(dateStr || "").trim(),
       time: String(timeStr || "").trim(),
-      account: String(row[2] || "現金").trim(),
-      name: String(row[3] || "未命名項目").trim(),
-      category: String(row[4] || "食").trim(),
-      currency: String(row[5] || "TWD").trim().toUpperCase(),
-      amount: Number(row[6]) || 0,
-      note: String(row[7] || "").trim()
+      account: String(dRow[2] || rRow[2] || "現金").trim(),
+      name: String(dRow[3] || rRow[3] || "未命名項目").trim(),
+      category: String(dRow[4] || rRow[4] || "食").trim(),
+      currency: String(dRow[5] || rRow[5] || "TWD").trim().toUpperCase(),
+      amount: Number(rRow[6]) || 0,
+      note: String(dRow[7] || rRow[7] || "").trim()
     });
   }
 
@@ -398,11 +408,20 @@ function callGeminiBookkeeper(userMessage, imageBase64, mimeType, autoSave = fal
   if (!apiKey) return { reply: "⚠️ 尚未設定 GEMINI_API_KEY！請至試算表上方選單點選「設定/更新 Gemini API Key」。", parsedTransactions: [] };
 
   const settings = getCustomSettings();
+  const now = new Date();
+  const timeZone = Session.getScriptTimeZone();
+  const currentDateStr = Utilities.formatDate(now, timeZone, "yyyy-MM-dd");
+  const currentTimeStr = Utilities.formatDate(now, timeZone, "HH:mm");
   
   const systemPrompt = `You are an expert multilingual financial bookkeeping assistant.
-Current Date: ${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd")}.
+Current Date: ${currentDateStr}.
+Current Time: ${currentTimeStr}.
 Valid Categories: ${JSON.stringify(settings.categories)}.
 Valid Accounts: ${JSON.stringify(settings.accounts)}.
+
+TIME AND DATE RULES:
+1. If user explicitly specifies date/time (e.g. "昨天", "早上9點"), parse accordingly.
+2. If date or time is NOT explicitly specified by the user, default "date" strictly to "${currentDateStr}" and "time" strictly to "${currentTimeStr}". Do NOT fallback to 00:00 or 12:00.
 
 CRITICAL AMOUNT SIGN RULES:
 1. ANY transaction representing money coming IN (e.g. Salary, dividend/配息, investment profit, cash gifts, refunds, repayment collected/代墊款歸還, selling assets, etc.) MUST have a POSITIVE amount (e.g. 5000).
@@ -420,8 +439,8 @@ Output JSON schema:
       "currency": "TWD", // 3-letter uppercase ISO code
       "category": "食", // Must match one of valid categories
       "account": "現金", // Must match one of valid accounts
-      "date": "YYYY-MM-DD",
-      "time": "HH:mm",
+      "date": "${currentDateStr}",
+      "time": "${currentTimeStr}",
       "note": "Any additional note"
     }
   ]
