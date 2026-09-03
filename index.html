@@ -1173,10 +1173,19 @@
             initSettingsUI();
 
             const now = new Date();
-            const todayStr = now.toISOString().split('T')[0];
+            const yearStr = now.getFullYear();
+            const monthStr = String(now.getMonth() + 1).padStart(2, '0');
+            const dayStr = String(now.getDate()).padStart(2, '0');
+            const todayStr = `${yearStr}-${monthStr}-${dayStr}`;
             const timeStr = now.toTimeString().slice(0, 5);
             ['add-date', 'manual-view-date'].forEach(id => { const el = document.getElementById(id); if (el) el.value = todayStr; });
             ['add-time', 'manual-view-time'].forEach(id => { const el = document.getElementById(id); if (el) el.value = timeStr; });
+
+            // 流水帳明細資料庫：月份一開始預設為當今當月份
+            const filterMonthEl = document.getElementById('filter-month');
+            if (filterMonthEl) {
+                filterMonthEl.value = monthStr;
+            }
 
             await fetchExchangeRates();
             await fetchCustomSettings();
