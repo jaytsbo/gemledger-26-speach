@@ -468,13 +468,20 @@ function promptSetApiKey() {
 }
 
 /**
- * 🔄 具備指數退避與 Jitter 的 HTTP 請求工具（有效應對 503/429/500/502/504 等暫時性過載異常）
+ * 🔄 具備指數退避與 Jitter 的 HTTP 請求工具（支援 8 秒上限與 503/429 過載快速 Failover）
  */
-function fetchWithRetry(url, options, maxRetries = 3) {
+function fetchWithRetry(url, options, maxRetries = 3, timeoutMs = 8000) {
   let lastError = null;
   let lastResponse = null;
+  const startTime = new Date().getTime();
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // 8 秒快速逾時防護：若已達逾時上限，提早返回以利切換至下一備援模型
+    if (new Date().getTime() - startTime >= timeoutMs) {
+      console.warn(`[API Timeout] 單一模型請求累計達 ${timeoutMs}ms，提早返回切換備用模型。`);
+      break;
+    }
+
     try {
       const res = UrlFetchApp.fetch(url, options);
       const code = res.getResponseCode();
@@ -493,10 +500,10 @@ function fetchWithRetry(url, options, maxRetries = 3) {
       }
 
       // 針對 429 (Rate Limit)、500、502、503 (Overloaded)、504 進行指數退避
-      if (attempt < maxRetries) {
+      if (attempt < maxRetries && (new Date().getTime() - startTime < timeoutMs)) {
         const baseDelayMs = 1000 * Math.pow(2, attempt);
         const jitterMs = Math.floor(Math.random() * 500);
-        const delayMs = Math.min(8000, baseDelayMs + jitterMs);
+        const delayMs = Math.min(timeoutMs, baseDelayMs + jitterMs);
         console.warn(`[API Retry] 收到狀態碼 ${code}，等待 ${delayMs}ms 進行第 ${attempt + 1}/${maxRetries} 次重試...`);
         Utilities.sleep(delayMs);
       }
@@ -692,10 +699,14 @@ Output JSON schema:
     } 
   };
   
-  // 嚴格維持模型定義，遵循 Model Freezing 原則
-  const model = "gemini-3.5-flash-lite";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
-  
+  // 🛡️ 模型級聯備援序列 (Cascade Fallback List)
+  // 優先順序：3.5 flash-lite (主模型) -> 3.6 flash (第一備援) -> 3.5 flash (第二備援)
+  const MODELS_CASCADE = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash"
+  ];
+
   const fetchOptions = { 
     method: "post", 
     contentType: "application/json", 
@@ -703,36 +714,62 @@ Output JSON schema:
     muteHttpExceptions: true 
   };
 
-  // 啟用指數退避重試
-  const fetchResult = fetchWithRetry(url, fetchOptions, 3);
+  let lastStatusCode = 0;
+  let lastErrorMsg = "";
 
-  if (fetchResult.success && fetchResult.response) {
-    try {
-      const json = JSON.parse(fetchResult.response.getContentText());
-      if (json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts) {
-        const parsed = JSON.parse(json.candidates[0].content.parts[0].text);
-        const txs = parsed.transactions || [];
-        return { 
-          reply: parsed.reply || "解析成功！請核對以下記帳明細：", 
-          parsedTransactions: txs 
-        };
+  for (let mIdx = 0; mIdx < MODELS_CASCADE.length; mIdx++) {
+    const currentModel = MODELS_CASCADE[mIdx];
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+    
+    const requestStartTime = new Date().getTime();
+    console.log(`[Gemini Cascade] 嘗試使用模型【${currentModel}】(順位 ${mIdx + 1}/${MODELS_CASCADE.length})...`);
+
+    // 針對單一模型最多重試 1 次，若 429 配額滿載或伺服器過載則迅速 Failover 到下一模型
+    const fetchResult = fetchWithRetry(url, fetchOptions, 1);
+    const elapsedMs = new Date().getTime() - requestStartTime;
+    lastStatusCode = fetchResult.code;
+
+    if (fetchResult.success && fetchResult.response) {
+      try {
+        const json = JSON.parse(fetchResult.response.getContentText());
+        if (json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts) {
+          const parsed = JSON.parse(json.candidates[0].content.parts[0].text);
+          const txs = parsed.transactions || [];
+          
+          let replyPrefix = "";
+          if (mIdx > 0) {
+            replyPrefix = `⚡ [注意：由於前置模型過載或限制，系統已自動為您切換至 ${currentModel} 完成解析！]\n\n`;
+          }
+
+          return { 
+            reply: replyPrefix + (parsed.reply || "解析成功！請核對以下記帳明細："), 
+            parsedTransactions: txs,
+            modelUsed: currentModel
+          };
+        }
+      } catch (parseErr) {
+        console.error(`[${currentModel}] 輸出 JSON 解析錯誤:`, parseErr);
       }
-    } catch (parseErr) {
-      console.error("Gemini 輸出 JSON 解析錯誤:", parseErr);
+    }
+
+    lastErrorMsg = fetchResult.response ? fetchResult.response.getContentText() : (fetchResult.error ? fetchResult.error.toString() : "連線逾時");
+    console.warn(`[Gemini Cascade] 模型 ${currentModel} 回應失敗 [HTTP ${lastStatusCode}，耗時 ${elapsedMs}ms]。準備切換至下一備援模型...`);
+
+    // 若非暫時性錯誤（如 400 格式錯誤、401/403 金鑰無效），換模型也無法解決，直接跳出
+    if (lastStatusCode === 400 || lastStatusCode === 401 || lastStatusCode === 403) {
+      break;
     }
   }
 
-  // 若遇到 503 Service Unavailable、429 配額耗盡或連線重試逾時，觸發 Fallback 備援降級
-  const statusCode = fetchResult.code;
-  if (statusCode === 503 || statusCode === 429 || statusCode === 500 || statusCode === 502 || statusCode === 504 || fetchResult.error) {
-    console.warn(`Gemini API 遭遇異常 (HTTP ${statusCode} / ${fetchResult.error})，啟動 Fallback 降級策略。`);
+  // 若所有模型皆因 429（每分鐘限制）、503（伺服器過載）或連線逾時而失敗，啟動最後防線：本地規則備援引擎
+  if (lastStatusCode === 429 || lastStatusCode === 503 || lastStatusCode === 500 || lastStatusCode === 502 || lastStatusCode === 504 || !lastStatusCode) {
+    console.warn(`[Gemini Cascade] 所有雲端模型皆受限或過載，啟動離線規則備援引擎。`);
     return fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr);
   }
 
-  // 其它非 503 的客戶端錯誤（例如 400 或 403 API Key 無效）
-  const errDetail = fetchResult.response ? fetchResult.response.getContentText() : (fetchResult.error ? fetchResult.error.toString() : "未知錯誤");
+  // 其他致命客戶端錯誤
   return { 
-    reply: `⚠️ 調用 Gemini API (${model}) 發生錯誤 [HTTP ${statusCode}]：${errDetail}`, 
+    reply: `⚠️ 調用 Gemini API 發生錯誤 [HTTP ${lastStatusCode}]：${lastErrorMsg}`, 
     parsedTransactions: [] 
   };
 }

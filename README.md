@@ -126,13 +126,18 @@ npm run deployments
 
 ---
 
-## 🤖 Gemini API 呼叫規範與架構 (AI Integration Spec)
+## 🤖 Gemini API 呼叫規範與多模型級聯架構 (AI Integration Spec)
 
-### 1. 模型規範 (Model Freezing)
-- **固定模型**：`gemini-3.5-flash-lite`（本專案嚴格遵循模型版本鎖定原則，不得擅自更動端點或模型名稱）。
-- **請求端點**：
+### 1. 模型級聯容錯清單 (Model Cascade Failover)
+為因應 Google AI 免費/付費方案每分鐘使用次數限制（RPM / TPM Rate Limit）與伺服器過載，系統採用階梯式自動容錯級聯架構：
+1. **主要模型（第一順位）**：`gemini-3.5-flash-lite`（極速、高性價比之主要解析引擎）。
+2. **第一備援（第二順位）**：`gemini-3.6-flash`（新一代高效能模型，於 3.5-flash-lite 滿載、503 或超過 8 秒未回覆時秒級無縫接手）。
+3. **第二備援（第三順位）**：`gemini-3.5-flash`（備用高穩定度通用模型）。
+4. **終極防線（第四順位）**：後端規則型離線備援引擎（當所有雲端端點皆受限時自動啟動，確保記帳 100% 不中斷）。
+
+- **請求端點格式**：
   ```http
-  POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={GEMINI_API_KEY}
+  POST https://generativelanguage.googleapis.com/v1beta/models/{CURRENT_MODEL}:generateContent?key={GEMINI_API_KEY}
   ```
 - **生成參數 (GenerationConfig)**：
   - `responseMimeType`: `"application/json"`（強制要求結構化 JSON 回應）
@@ -165,14 +170,18 @@ AI 回應經由 System Prompt 引導輸出為嚴格的 JSON 格式：
 
 ---
 
-## 🛡️ 自動化錯誤處理與 503 Fallback 容錯策略 (Fault Tolerance)
+## 🛡️ 自動化錯誤處理、多模型 Failover 與 503 容錯策略 (Fault Tolerance)
 
-在雲端環境中，外部 API 可能因網路波動、配額限制或伺服器負載出現短暫異常。為確保記帳系統高可用性，本專案在 [`Code.gs`](./Code.gs) 實作了雙層防護網：
+在雲端環境中，外部 API 可能因網路波動、配額限制（429 Rate Limit）或伺服器負載（503 Overloaded）出現短暫異常。為確保記帳系統高可用性，本專案在 [`Code.gs`](./Code.gs) 實作了三層防護網：
 
-### 1. 指數退避重試演算法 (Exponential Backoff with Full Jitter)
-當呼叫 Gemini API 或即時匯率 API 遇到下列狀態碼時，系統會自動啟動重試機制：
-- **觸發條件**：HTTP `503` (Service Unavailable)、`429` (Rate Limit / Quota Exceeded)、`500`、`502`、`504` 或網路連線逾時中斷。
-- **略過重試**：HTTP `400` (格式錯誤)、`401/403` (API Key 無效或權限不足) 直接終止重試並回報。
+### 1. 8 秒上限與指數退避 (8s Timeout & Exponential Backoff with Full Jitter)
+- 單一模型請求加入 **8 秒快速逾時防護**：若單一模型連線或重試累計超過 8,000ms，系統立即判定該模型處於擁塞狀態，主動中止等待並迅速 Failover 切換至下一級備用模型。
+- 當遇到 HTTP `429` (Rate Limit)、`503` (Service Unavailable)、`500`、`502`、`504` 時，單一模型最多重試 1 次即快速換軌，重試延遲公式包含隨機 Jitter：
+  $$\text{Delay} = \min\left(8000\text{ms},\, 1000\text{ms} \times 2^{\text{attempt}} + \text{random}(0, 500\text{ms})\right)$$
+
+### 2. 多模型階梯切換 (Model Cascade Chain)
+- 當 `gemini-3.5-flash-lite` 遭遇 429 配額滿載、503 伺服器忙碌或 8 秒逾時，系統依序切換至 `gemini-3.6-flash` $\rightarrow$ `gemini-3.5-flash`。
+- 解析成功時自動於回覆附加警示標籤，例如：`⚡ [注意：由於前置模型過載或限制，系統已自動為您切換至 gemini-3.6-flash 完成解析！]`。
 - **重試延遲公式**：
   $$\text{Delay} = \min\left(8000\text{ms},\, 1000\text{ms} \times 2^{\text{attempt}} + \text{random}(0, 500\text{ms})\right)$$
 - 最多進行 **3 次重試**，藉由隨機抖動 (Jitter) 避免伺服器驚群效應 (Thundering Herd)。
