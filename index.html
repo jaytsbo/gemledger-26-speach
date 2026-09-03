@@ -1490,7 +1490,56 @@
                 applyFiltersAndRecompute();
             });
 
-            ['filter-year', 'filter-month', 'filter-date', 'filter-account', 'filter-category', 'filter-currency'].forEach(id => {
+            // 1. 特定日期變更：自動雙向同步「年份」與「月份」選單，避免條件相互打架
+            document.getElementById('filter-date')?.addEventListener('change', (e) => {
+                const val = e.target.value;
+                if (val) {
+                    const [y, m] = val.split('-');
+                    const yearSelect = document.getElementById('filter-year');
+                    const monthSelect = document.getElementById('filter-month');
+                    if (yearSelect) {
+                        const hasYear = Array.from(yearSelect.options).some(opt => opt.value === y);
+                        yearSelect.value = hasYear ? y : 'ALL';
+                    }
+                    if (monthSelect) {
+                        monthSelect.value = m;
+                    }
+                }
+                currentPage = 1;
+                applyFiltersAndRecompute();
+            });
+
+            // 2. 年份變更：若特定日期非該年度則自動清空；切換年份時自動將月份設為 ALL，避免使用者查看 2025 年時因鎖死當前月份而誤判為 0 筆
+            document.getElementById('filter-year')?.addEventListener('change', (e) => {
+                const newYear = e.target.value;
+                const dateInput = document.getElementById('filter-date');
+                const monthSelect = document.getElementById('filter-month');
+                if (dateInput && dateInput.value && !dateInput.value.startsWith(newYear)) {
+                    dateInput.value = '';
+                }
+                if (monthSelect && dateInput && !dateInput.value) {
+                    monthSelect.value = 'ALL';
+                }
+                currentPage = 1;
+                applyFiltersAndRecompute();
+            });
+
+            // 3. 月份變更：若特定日期與新月份不符則自動清空特定日期
+            document.getElementById('filter-month')?.addEventListener('change', (e) => {
+                const newMonth = e.target.value;
+                const dateInput = document.getElementById('filter-date');
+                if (dateInput && dateInput.value) {
+                    const parts = dateInput.value.split('-');
+                    if (newMonth !== 'ALL' && parts[1] !== newMonth) {
+                        dateInput.value = '';
+                    }
+                }
+                currentPage = 1;
+                applyFiltersAndRecompute();
+            });
+
+            // 4. 帳戶、分類、幣別變更
+            ['filter-account', 'filter-category', 'filter-currency'].forEach(id => {
                 document.getElementById(id)?.addEventListener('change', () => { currentPage = 1; applyFiltersAndRecompute(); });
             });
 
@@ -1540,9 +1589,15 @@
 
             filteredTransactions = rawTransactions.filter(t => {
                 const parts = (t.date || '').split('-');
-                if (yearFilter !== 'ALL' && parts[0] !== yearFilter) return false;
-                if (monthFilter !== 'ALL' && parts[1] !== monthFilter) return false;
-                if (dateFilter && t.date !== dateFilter) return false;
+                
+                // 優先級解耦：若有指定「特定日期」，以特定日期為準（不再與年/月選單發生衝突）
+                if (dateFilter) {
+                    if (t.date !== dateFilter) return false;
+                } else {
+                    if (yearFilter !== 'ALL' && parts[0] !== yearFilter) return false;
+                    if (monthFilter !== 'ALL' && parts[1] !== monthFilter) return false;
+                }
+
                 if (accountFilter !== 'ALL' && t.account !== accountFilter) return false;
                 if (categoryFilter !== 'ALL' && t.category !== categoryFilter) return false;
                 if (currencyFilter !== 'ALL' && (t.currency || 'TWD').toUpperCase() !== currencyFilter) return false;
