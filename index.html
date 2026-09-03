@@ -522,60 +522,6 @@
     </main>
 
     <!-- Modals -->
-    <div id="manual-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-3 sm:p-4">
-        <div class="bg-white rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-slate-100 max-h-[92vh] overflow-y-auto">
-            <div class="flex items-center justify-between pb-3 border-b border-slate-100">
-                <h3 class="text-sm sm:text-base font-bold text-slate-900">手動新增記帳明細</h3>
-                <button class="modal-close p-1 text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
-            </div>
-            <form id="form-manual-add" class="space-y-3.5 pt-3.5 text-xs">
-                <div class="grid grid-cols-2 gap-2.5">
-                    <div>
-                        <label class="block font-semibold text-slate-700 mb-1">交易日期</label>
-                        <input id="add-date" type="date" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-800">
-                    </div>
-                    <div>
-                        <label class="block font-semibold text-slate-700 mb-1">交易時間</label>
-                        <input id="add-time" type="time" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-800">
-                    </div>
-                </div>
-                <div>
-                    <label class="block font-semibold text-slate-700 mb-1">項目名稱</label>
-                    <input id="add-name" type="text" placeholder="例如：一蘭拉麵" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800">
-                </div>
-                <div class="grid grid-cols-2 gap-2.5">
-                    <div>
-                        <label class="block font-semibold text-slate-700 mb-1">支付帳戶</label>
-                        <select id="add-account" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800"></select>
-                    </div>
-                    <div>
-                        <label class="block font-semibold text-slate-700 mb-1">分類標籤</label>
-                        <select id="add-category" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800"></select>
-                    </div>
-                </div>
-                <div class="grid grid-cols-2 gap-2.5">
-                    <div>
-                        <label class="block font-semibold text-slate-700 mb-1">幣別代碼</label>
-                        <select id="add-currency" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800">
-                            <option value="TWD">TWD 新台幣</option><option value="JPY">JPY 日圓</option><option value="USD">USD 美元</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block font-semibold text-slate-700 mb-1">金額 (支出負/收入正)</label>
-                        <input id="add-amount" type="number" step="any" placeholder="-120 或 5000" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800 font-mono">
-                    </div>
-                </div>
-                <div>
-                    <label class="block font-semibold text-slate-700 mb-1">備註細節</label>
-                    <input id="add-note" type="text" placeholder="選填" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800">
-                </div>
-                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                    <button type="button" class="modal-close px-3.5 py-1.5 text-slate-600 hover:bg-slate-100 rounded-xl">取消</button>
-                    <button type="submit" class="px-4 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-semibold rounded-xl">儲存入帳</button>
-                </div>
-            </form>
-        </div>
-    </div>
 
     <!-- Edit Modal -->
     <div id="edit-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-3 sm:p-4">
@@ -1179,6 +1125,51 @@
             return `${amount < 0 ? '-' : ''}${sym}${formatted}`;
         }
 
+        // =========================================================================
+        // ⚡ SWR (Stale-While-Revalidate) 本地 0ms 秒開快取引擎
+        // =========================================================================
+        function loadCachedStateAndRender() {
+            let hasData = false;
+            try {
+                // 1. 立即讀取匯率快取
+                const cachedRates = localStorage.getItem('GEMLEDGER_EXCHANGE_RATES_CACHE');
+                if (cachedRates) {
+                    const parsed = JSON.parse(cachedRates);
+                    if (parsed && parsed.rates) {
+                        exchangeRates = parsed;
+                        renderExchangeRatesStrip();
+                    }
+                }
+
+                // 2. 立即讀取設定快取
+                const cachedSettings = localStorage.getItem('GEMLEDGER_SETTINGS_CACHE') || localStorage.getItem('MOCK_CUSTOM_SETTINGS');
+                if (cachedSettings) {
+                    const parsed = JSON.parse(cachedSettings);
+                    if (parsed && (parsed.accounts || parsed.categories)) {
+                        customSettings = parsed;
+                        populateSettingsOptions();
+                        renderSettingsModalLists();
+                    }
+                }
+
+                // 3. 立即讀取流水帳歷史資料（保障總資產與各帳戶餘額 0ms 精確呈現）
+                const cachedData = localStorage.getItem('GEMLEDGER_CLIENT_DATA_CACHE') || localStorage.getItem('MOCK_SHEET_DATA');
+                if (cachedData) {
+                    const parsed = JSON.parse(cachedData);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        rawTransactions = parsed;
+                        populateYearFilter();
+                        applyFiltersAndRecompute();
+                        hasData = true;
+                        console.log(`[SWR] ⚡ 0ms 秒開快取載入成功，首屏瞬時呈現 ${parsed.length} 筆資料`);
+                    }
+                }
+            } catch (e) {
+                console.warn('[SWR] 本地快取讀取異常:', e);
+            }
+            return hasData;
+        }
+
         document.addEventListener('DOMContentLoaded', async () => {
             lucide.createIcons();
             initSidebarDrawer();
@@ -1194,8 +1185,10 @@
             const dayStr = String(now.getDate()).padStart(2, '0');
             const todayStr = `${yearStr}-${monthStr}-${dayStr}`;
             const timeStr = now.toTimeString().slice(0, 5);
-            ['add-date', 'manual-view-date'].forEach(id => { const el = document.getElementById(id); if (el) el.value = todayStr; });
-            ['add-time', 'manual-view-time'].forEach(id => { const el = document.getElementById(id); if (el) el.value = timeStr; });
+            const manualDateEl = document.getElementById('manual-view-date');
+            if (manualDateEl) manualDateEl.value = todayStr;
+            const manualTimeEl = document.getElementById('manual-view-time');
+            if (manualTimeEl) manualTimeEl.value = timeStr;
 
             // 流水帳明細資料庫：月份一開始預設為當今當月份
             const filterMonthEl = document.getElementById('filter-month');
@@ -1203,9 +1196,21 @@
                 filterMonthEl.value = monthStr;
             }
 
-            await fetchExchangeRates();
-            await fetchCustomSettings();
-            await fetchTransactions(true);
+            // ⚡ 第一步：0 毫秒立即讀取本地快取進行首屏極速渲染 (SWR)
+            const hasCached = loadCachedStateAndRender();
+            if (!hasCached) {
+                const countBadge = document.getElementById('ledger-badge-count');
+                if (countBadge) countBadge.textContent = '同步中...';
+            }
+
+            // 🚀 第二步：解除序列串行瀑布 (Waterfall)，背景並行靜默同步最新雲端資料
+            Promise.allSettled([
+                fetchExchangeRates(),
+                fetchCustomSettings(),
+                fetchTransactions(false) // 傳入 false 命中後端 CacheService 快取 (只需 200ms)
+            ]).then(() => {
+                console.log('[SWR] 雲端最新資料背景靜默同步完成');
+            });
         });
 
         function initSidebarDrawer() {
@@ -1291,6 +1296,7 @@
                 const rates = await ApiService.getExchangeRates();
                 if (rates && rates.rates) {
                     exchangeRates = rates;
+                    localStorage.setItem('GEMLEDGER_EXCHANGE_RATES_CACHE', JSON.stringify(rates));
                     renderExchangeRatesStrip();
                 }
             } catch (err) {
@@ -1324,6 +1330,7 @@
                 const settings = await ApiService.getCustomSettings();
                 if (settings) {
                     customSettings = settings;
+                    localStorage.setItem('GEMLEDGER_SETTINGS_CACHE', JSON.stringify(settings));
                     populateSettingsOptions();
                     renderSettingsModalLists();
                 }
@@ -1336,6 +1343,7 @@
             try {
                 const data = await ApiService.getSheetData(forceRefresh);
                 rawTransactions = Array.isArray(data) ? data : [];
+                localStorage.setItem('GEMLEDGER_CLIENT_DATA_CACHE', JSON.stringify(rawTransactions));
                 populateYearFilter();
                 applyFiltersAndRecompute();
             } catch (err) {
@@ -1344,7 +1352,7 @@
         }
 
         function populateSettingsOptions() {
-            ['filter-account', 'add-account', 'edit-account', 'manual-view-account'].forEach(id => {
+            ['filter-account', 'edit-account', 'manual-view-account'].forEach(id => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 const isFilter = id === 'filter-account';
@@ -1354,7 +1362,7 @@
                 if ((customSettings.accounts || []).includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
             });
 
-            ['filter-category', 'add-category', 'edit-category', 'manual-view-category'].forEach(id => {
+            ['filter-category', 'edit-category', 'manual-view-category'].forEach(id => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 const isFilter = id === 'filter-category';
@@ -1653,7 +1661,15 @@
             document.getElementById('kpi-food-amount').textContent = `餐飲: ${formatMoney(foodExpenseConverted, currentBaseCurrency)}`;
         }
 
+        let chartRafId = null;
         function updateCharts() {
+            if (chartRafId) cancelAnimationFrame(chartRafId);
+            chartRafId = requestAnimationFrame(() => {
+                _renderAllCharts();
+            });
+        }
+
+        function _renderAllCharts() {
             const catCtx = document.getElementById('categoryChart')?.getContext('2d');
             if (catCtx) {
                 const catMap = {};
@@ -1783,12 +1799,6 @@
         }
 
         function initModalHandlers() {
-            document.getElementById('btn-open-manual-modal')?.addEventListener('click', () => {
-                const now = new Date();
-                document.getElementById('add-date').value = now.toISOString().split('T')[0];
-                document.getElementById('add-time').value = now.toTimeString().slice(0, 5);
-                openModal(document.getElementById('manual-modal'));
-            });
             document.getElementById('btn-open-settings')?.addEventListener('click', () => {
                 renderSettingsModalLists();
                 openModal(document.getElementById('settings-modal'));
@@ -1799,28 +1809,6 @@
                     const modal = e.target.closest('.fixed');
                     if (modal) closeModal(modal);
                 });
-            });
-
-            document.getElementById('form-manual-add')?.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const newItem = {
-                    date: document.getElementById('add-date')?.value || '',
-                    time: document.getElementById('add-time')?.value || '',
-                    account: document.getElementById('add-account')?.value || '現金',
-                    name: document.getElementById('add-name')?.value || '',
-                    category: document.getElementById('add-category')?.value || '食',
-                    currency: document.getElementById('add-currency')?.value || 'TWD',
-                    amount: parseFloat(document.getElementById('add-amount')?.value) || 0,
-                    note: document.getElementById('add-note')?.value || ''
-                };
-                try {
-                    const res = await ApiService.addTransaction(newItem);
-                    showToast(res?.message || '已成功新增記帳紀錄！', 'success');
-                    closeModal(document.getElementById('manual-modal'));
-                    await fetchTransactions();
-                } catch (err) {
-                    showToast('新增失敗: ' + (err.message || err), 'error');
-                }
             });
 
             document.getElementById('form-edit-transaction')?.addEventListener('submit', async (e) => {
