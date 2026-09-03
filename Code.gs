@@ -196,13 +196,17 @@ function clearSheetDataCache() {
 function getCustomSettings() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const fallbackCurrencies = ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD'];
+  let baseCurrency = 'TWD';
+  try {
+    baseCurrency = PropertiesService.getScriptProperties().getProperty('DEFAULT_BASE_CURRENCY') || 'TWD';
+  } catch (e) {}
 
-  if (!ss) return { accounts: ['現金'], categories: ['食', '收入'], currencies: fallbackCurrencies };
+  if (!ss) return { accounts: ['現金'], categories: ['食', '收入'], currencies: fallbackCurrencies, baseCurrency };
   const sheet = ss.getSheetByName("系統設定");
-  if (!sheet) return { accounts: ['現金'], categories: ['食', '收入'], currencies: fallbackCurrencies };
+  if (!sheet) return { accounts: ['現金'], categories: ['食', '收入'], currencies: fallbackCurrencies, baseCurrency };
 
   const values = sheet.getDataRange().getValues();
-  if (values.length <= 1) return { accounts: ['現金'], categories: ['食', '收入'], currencies: fallbackCurrencies };
+  if (values.length <= 1) return { accounts: ['現金'], categories: ['食', '收入'], currencies: fallbackCurrencies, baseCurrency };
 
   const accounts = [], categories = [];
   for (let i = 1; i < values.length; i++) {
@@ -212,7 +216,8 @@ function getCustomSettings() {
   return { 
     accounts: accounts.length > 0 ? accounts : ['現金'], 
     categories: categories.length > 0 ? categories : ['食', '收入'], 
-    currencies: fallbackCurrencies 
+    currencies: fallbackCurrencies,
+    baseCurrency: baseCurrency
   };
 }
 
@@ -236,6 +241,15 @@ function saveCustomSettings(settings) {
     }
     if (rows.length > 0) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
     sheet.setFrozenRows(1);
+
+    if (settings && settings.baseCurrency) {
+      try {
+        PropertiesService.getScriptProperties().setProperty('DEFAULT_BASE_CURRENCY', String(settings.baseCurrency).trim().toUpperCase());
+      } catch (e) {
+        console.warn("無法寫入 ScriptProperties 預設幣別:", e);
+      }
+    }
+
     return { success: true, message: "已成功儲存自訂設定！" };
   } finally {
     lock.releaseLock();

@@ -164,7 +164,7 @@
                         <span>系統設定</span>
                     </button>
 
-                    <button id="btn-open-manual-modal" class="inline-flex items-center gap-1 px-2.5 sm:px-3.5 py-1.5 text-xs font-medium text-white bg-teal-700 hover:bg-teal-800 rounded-xl shadow-xs shadow-teal-700/20 transition-all">
+                    <button id="btn-header-quick-add" class="inline-flex items-center gap-1 px-2.5 sm:px-3.5 py-1.5 text-xs font-medium text-white bg-teal-700 hover:bg-teal-800 rounded-xl shadow-xs shadow-teal-700/20 transition-all cursor-pointer" title="切換至手動記帳">
                         <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                         <span class="hidden sm:inline">記一筆</span>
                     </button>
@@ -523,6 +523,98 @@
 
     <!-- Modals -->
 
+    <!-- ⚡ Quick Add Transaction Modal (半透明浮動記帳視窗，可透視後方帳務) -->
+    <div id="quick-add-modal" class="fixed inset-0 bg-slate-950/20 backdrop-blur-[1.5px] z-50 hidden items-center justify-center p-3 sm:p-4 transition-all">
+        <div class="bg-white/92 backdrop-blur-xl rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-white/70 ring-1 ring-black/5 max-h-[92vh] overflow-y-auto transform transition-all">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-200/60">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-xl bg-teal-600/15 text-teal-700 flex items-center justify-center font-bold">
+                        <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-bold text-slate-900">快速記一筆</h3>
+                        <p class="text-[10px] text-slate-500">透明懸浮視窗，可直接對照後方帳務明細</p>
+                    </div>
+                </div>
+                <button type="button" class="modal-close p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100/60 rounded-xl transition-all">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <form id="form-quick-add" class="space-y-3.5 pt-3.5 text-xs">
+                <div class="grid grid-cols-2 gap-2.5">
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">交易日期</label>
+                        <input id="quick-add-date" type="date" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-1.5 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">交易時間</label>
+                        <input id="quick-add-time" type="time" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-1.5 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">項目名稱</label>
+                    <input id="quick-add-name" type="text" placeholder="例如：星巴克拿鐵、超市採買" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none placeholder:text-slate-400">
+                </div>
+
+                <div class="grid grid-cols-2 gap-2.5">
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">支付帳戶</label>
+                        <select id="quick-add-account" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none"></select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">分類標籤</label>
+                        <select id="quick-add-category" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none"></select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2.5">
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1">幣別代碼</label>
+                        <select id="quick-add-currency" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 font-medium focus:ring-2 focus:ring-teal-600/20 focus:outline-none"></select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                            <span>交易金額</span>
+                            <span class="text-[10px] text-slate-400 font-normal">支出請填負數</span>
+                        </label>
+                        <div class="relative">
+                            <input id="quick-add-amount" type="number" step="any" placeholder="-65" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 font-mono text-sm font-semibold focus:ring-2 focus:ring-teal-600/20 focus:outline-none">
+                            <button type="button" id="btn-quick-add-toggle-sign" class="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] rounded-md font-mono cursor-pointer" title="快速切換正負號">+/-</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 即時折算提示 -->
+                <div id="quick-add-conversion-preview" class="p-2.5 bg-teal-50/70 border border-teal-200/60 rounded-xl text-teal-800 flex items-center justify-between text-[11px] font-mono">
+                    <span>基準幣別折算:</span>
+                    <span id="quick-add-preview-text" class="font-bold">0.00</span>
+                </div>
+
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">備註細節 (可選)</label>
+                    <input id="quick-add-note" type="text" placeholder="選填，例如：統編、分帳明細" class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none placeholder:text-slate-400">
+                </div>
+
+                <div class="flex items-center justify-between pt-2">
+                    <label class="flex items-center gap-2 cursor-pointer text-slate-600 select-none">
+                        <input id="quick-add-continuous-mode" type="checkbox" class="rounded text-teal-700 focus:ring-teal-600 w-3.5 h-3.5">
+                        <span class="text-[11px] font-medium">連續記帳模式 (儲存後不關閉)</span>
+                    </label>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-200/60">
+                    <button type="button" class="modal-close px-4 py-2 text-slate-600 hover:bg-slate-100/70 rounded-xl transition-all font-medium cursor-pointer">取消</button>
+                    <button id="btn-submit-quick-add" type="submit" class="px-5 py-2 bg-gradient-to-r from-teal-700 to-emerald-600 hover:from-teal-800 hover:to-emerald-700 text-white font-bold rounded-xl shadow-xs shadow-teal-700/20 transition-all flex items-center gap-1.5 cursor-pointer">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                        <span>確認寫入</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Edit Modal -->
     <div id="edit-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-3 sm:p-4">
         <div class="bg-white rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-slate-100 max-h-[92vh] overflow-y-auto">
@@ -588,6 +680,25 @@
                 <button class="modal-close p-1 text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
             </div>
             <div class="space-y-4 pt-3.5 text-xs">
+                <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                    <label class="font-bold text-slate-800 flex items-center justify-between">
+                        <span>預設基準貨幣 (Default Base Currency)</span>
+                        <span class="text-[10px] text-teal-700 font-normal">開啟 APP 時以此幣別自動折算呈現</span>
+                    </label>
+                    <select id="settings-base-currency" class="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 font-medium">
+                        <option value="TWD">TWD 新台幣 (NT$)</option>
+                        <option value="EUR">EUR 歐元 (€)</option>
+                        <option value="USD">USD 美元 ($)</option>
+                        <option value="JPY">JPY 日圓 (¥)</option>
+                        <option value="GBP">GBP 英鎊 (£)</option>
+                        <option value="CNY">CNY 人民幣 (¥)</option>
+                        <option value="KRW">KRW 韓元 (₩)</option>
+                        <option value="HKD">HKD 港幣 (HK$)</option>
+                        <option value="SGD">SGD 新加坡幣 (S$)</option>
+                        <option value="AUD">AUD 澳幣 (A$)</option>
+                        <option value="THB">THB 泰銖 (฿)</option>
+                    </select>
+                </div>
                 <div>
                     <label class="font-bold text-slate-800 block mb-1.5">帳戶清單</label>
                     <div id="settings-accounts-list" class="flex flex-wrap gap-1.5 p-2.5 bg-slate-50 border border-slate-200 rounded-xl min-h-[44px] mb-2"></div>
@@ -629,7 +740,8 @@
         const DEFAULT_SETTINGS = {
             accounts: ['現金', 'LINE Pay', 'LINE Bank', '郵局', '永豐銀行', '國泰世華', '玉山銀行', '悠遊卡', '街口支付', '台新Richart'],
             categories: ['食', '衣', '住', '行', '育樂', '學習費用', '醫療/雜項', '收入', '投資', '初始資產', '代墊款', '代墊回收', '內部轉帳'],
-            currencies: ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD']
+            currencies: ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD'],
+            baseCurrency: 'TWD'
         };
 
         function getMockDefaultTransactions() {
@@ -862,7 +974,8 @@
                     const updated = {
                         ...current,
                         accounts: (settings.accounts || []).map(a => String(a).trim()).filter(Boolean),
-                        categories: (settings.categories || []).map(c => String(c).trim()).filter(Boolean)
+                        categories: (settings.categories || []).map(c => String(c).trim()).filter(Boolean),
+                        baseCurrency: settings.baseCurrency ? String(settings.baseCurrency).trim().toUpperCase() : (current.baseCurrency || 'TWD')
                     };
                     LocalStorageAdapter.saveSettings(updated);
                     return { success: true, message: "已成功儲存自訂設定！" };
@@ -1164,6 +1277,19 @@
                         console.log(`[SWR] ⚡ 0ms 秒開快取載入成功，首屏瞬時呈現 ${parsed.length} 筆資料`);
                     }
                 }
+
+                // 4. 立即讀取使用者預設基準貨幣偏好 (支援 EUR、USD、JPY 等自訂偏好持久化)
+                const savedCurrency = localStorage.getItem('GEMLEDGER_BASE_CURRENCY') || (customSettings && customSettings.baseCurrency) || 'TWD';
+                currentBaseCurrency = savedCurrency;
+                const baseSelect = document.getElementById('base-currency-select');
+                if (baseSelect) baseSelect.value = currentBaseCurrency;
+                const settingsBase = document.getElementById('settings-base-currency');
+                if (settingsBase) settingsBase.value = currentBaseCurrency;
+                const manualCurEl = document.getElementById('manual-view-currency');
+                if (manualCurEl && Array.from(manualCurEl.options).some(o => o.value === currentBaseCurrency)) {
+                    manualCurEl.value = currentBaseCurrency;
+                }
+                document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
             } catch (e) {
                 console.warn('[SWR] 本地快取讀取異常:', e);
             }
@@ -1287,6 +1413,9 @@
                 document.getElementById('chat-text-input')?.focus();
             } else if (viewName === 'manual-bookkeeping') {
                 updateManualViewConversionPreview();
+                setTimeout(() => {
+                    document.getElementById('manual-view-amount')?.focus();
+                }, 80);
             }
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
@@ -1331,6 +1460,17 @@
                 if (settings) {
                     customSettings = settings;
                     localStorage.setItem('GEMLEDGER_SETTINGS_CACHE', JSON.stringify(settings));
+
+                    // 若本地尚未記錄過偏好，或雲端有指定預設幣別，同步至當前基準幣別
+                    if (!localStorage.getItem('GEMLEDGER_BASE_CURRENCY') && settings.baseCurrency) {
+                        currentBaseCurrency = settings.baseCurrency;
+                        localStorage.setItem('GEMLEDGER_BASE_CURRENCY', currentBaseCurrency);
+                        const baseSelect = document.getElementById('base-currency-select');
+                        if (baseSelect) baseSelect.value = currentBaseCurrency;
+                        document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
+                        applyFiltersAndRecompute();
+                    }
+
                     populateSettingsOptions();
                     renderSettingsModalLists();
                 }
@@ -1352,7 +1492,7 @@
         }
 
         function populateSettingsOptions() {
-            ['filter-account', 'edit-account', 'manual-view-account'].forEach(id => {
+            ['filter-account', 'edit-account', 'manual-view-account', 'quick-add-account'].forEach(id => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 const isFilter = id === 'filter-account';
@@ -1362,7 +1502,7 @@
                 if ((customSettings.accounts || []).includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
             });
 
-            ['filter-category', 'edit-category', 'manual-view-category'].forEach(id => {
+            ['filter-category', 'edit-category', 'manual-view-category', 'quick-add-category'].forEach(id => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 const isFilter = id === 'filter-category';
@@ -1371,6 +1511,14 @@
                     (customSettings.categories || []).map(c => `<option value="${c}">${c}</option>`).join('');
                 if ((customSettings.categories || []).includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
             });
+
+            const quickCurrencyEl = document.getElementById('quick-add-currency');
+            if (quickCurrencyEl) {
+                const curVal = quickCurrencyEl.value || currentBaseCurrency;
+                quickCurrencyEl.innerHTML = (customSettings.currencies || ['TWD', 'EUR', 'USD', 'JPY', 'GBP', 'CNY', 'KRW', 'HKD', 'SGD', 'AUD', 'THB'])
+                    .map(c => `<option value="${c}">${c} ${getCurrencySymbol(c)}</option>`).join('');
+                if (curVal) quickCurrencyEl.value = curVal;
+            }
         }
 
         function populateYearFilter() {
@@ -1402,6 +1550,12 @@
                     </span>
                 `).join('');
             }
+
+            const settingsBaseEl = document.getElementById('settings-base-currency');
+            if (settingsBaseEl) {
+                settingsBaseEl.value = customSettings.baseCurrency || currentBaseCurrency || 'TWD';
+            }
+
             lucide.createIcons();
         }
 
@@ -1485,11 +1639,24 @@
                 }
 
                 try {
+                    const chosenBaseCurrency = document.getElementById('settings-base-currency')?.value || currentBaseCurrency;
+                    customSettings.baseCurrency = chosenBaseCurrency;
+                    currentBaseCurrency = chosenBaseCurrency;
+                    localStorage.setItem('GEMLEDGER_BASE_CURRENCY', chosenBaseCurrency);
+
+                    const baseSelect = document.getElementById('base-currency-select');
+                    if (baseSelect) baseSelect.value = chosenBaseCurrency;
+                    const manualCurEl = document.getElementById('manual-view-currency');
+                    if (manualCurEl && Array.from(manualCurEl.options).some(o => o.value === chosenBaseCurrency)) {
+                        manualCurEl.value = chosenBaseCurrency;
+                    }
+                    document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
+
                     const res = await ApiService.saveCustomSettings(customSettings);
                     populateSettingsOptions();
                     closeModal(document.getElementById('settings-modal'));
                     applyFiltersAndRecompute();
-                    showToast(res?.message || '已成功儲存自訂帳戶與分類設定！', 'success');
+                    showToast(res?.message || `已成功儲存設定！預設基準幣別已套用為 ${chosenBaseCurrency}`, 'success');
                 } catch (err) {
                     showToast('儲存設定失敗: ' + (err.message || err), 'error');
                 } finally {
@@ -1501,8 +1668,17 @@
         function initFilterListeners() {
             document.getElementById('base-currency-select')?.addEventListener('change', (e) => {
                 currentBaseCurrency = e.target.value;
+                localStorage.setItem('GEMLEDGER_BASE_CURRENCY', currentBaseCurrency);
+                customSettings.baseCurrency = currentBaseCurrency;
+                const settingsBase = document.getElementById('settings-base-currency');
+                if (settingsBase) settingsBase.value = currentBaseCurrency;
+                const manualCurEl = document.getElementById('manual-view-currency');
+                if (manualCurEl && Array.from(manualCurEl.options).some(o => o.value === currentBaseCurrency)) {
+                    manualCurEl.value = currentBaseCurrency;
+                }
                 document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
                 applyFiltersAndRecompute();
+                showToast(`已切換預設基準幣別為 ${currentBaseCurrency}，下次開啟將自動套用！`, 'success');
             });
 
             // 1. 特定日期變更：自動雙向同步「年份」與「月份」選單，避免條件相互打架
@@ -1811,6 +1987,98 @@
                 });
             });
 
+            // 點擊彈窗半透明背景空白處直接關閉
+            ['quick-add-modal', 'edit-modal', 'settings-modal'].forEach(id => {
+                const modal = document.getElementById(id);
+                if (modal) {
+                    modal.addEventListener('click', (e) => {
+                        if (e.target === modal) closeModal(modal);
+                    });
+                }
+            });
+
+            // ⚡ 右上角「記一筆」按鈕：在當前儀表板彈出半透明浮動視窗
+            document.getElementById('btn-header-quick-add')?.addEventListener('click', () => {
+                openQuickAddModal();
+            });
+
+            // 即時折算預覽計算
+            function updateQuickAddConversionPreview() {
+                const amtVal = parseFloat(document.getElementById('quick-add-amount')?.value) || 0;
+                const cur = document.getElementById('quick-add-currency')?.value || currentBaseCurrency;
+                const converted = convertCurrency(amtVal, cur, currentBaseCurrency);
+                const previewEl = document.getElementById('quick-add-preview-text');
+                if (previewEl) {
+                    previewEl.textContent = `${formatMoney(converted, currentBaseCurrency)} (${currentBaseCurrency})`;
+                }
+            }
+
+            document.getElementById('quick-add-amount')?.addEventListener('input', updateQuickAddConversionPreview);
+            document.getElementById('quick-add-currency')?.addEventListener('change', updateQuickAddConversionPreview);
+
+            // 正負號快捷切換
+            document.getElementById('btn-quick-add-toggle-sign')?.addEventListener('click', () => {
+                const input = document.getElementById('quick-add-amount');
+                if (!input) return;
+                const cur = parseFloat(input.value);
+                if (!isNaN(cur) && cur !== 0) {
+                    input.value = (cur * -1).toString();
+                    updateQuickAddConversionPreview();
+                } else if (input.value === '') {
+                    input.value = '-';
+                }
+            });
+
+            // 快速記帳表單提交
+            document.getElementById('form-quick-add')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const submitBtn = document.getElementById('btn-submit-quick-add');
+                const originalHtml = submitBtn ? submitBtn.innerHTML : '確認寫入';
+                const continuous = document.getElementById('quick-add-continuous-mode')?.checked;
+
+                const newItem = {
+                    date: document.getElementById('quick-add-date').value,
+                    time: document.getElementById('quick-add-time').value,
+                    account: document.getElementById('quick-add-account').value,
+                    name: document.getElementById('quick-add-name').value.trim(),
+                    category: document.getElementById('quick-add-category').value,
+                    currency: document.getElementById('quick-add-currency').value,
+                    amount: parseFloat(document.getElementById('quick-add-amount').value) || 0,
+                    note: document.getElementById('quick-add-note').value.trim()
+                };
+
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>寫入中...</span>`;
+                    lucide.createIcons();
+                }
+
+                try {
+                    const res = await ApiService.addTransaction(newItem);
+                    showToast(res?.message || `已成功寫入「${newItem.name}」！`, 'success');
+                    await fetchTransactions();
+
+                    if (continuous) {
+                        document.getElementById('quick-add-name').value = '';
+                        document.getElementById('quick-add-amount').value = '';
+                        document.getElementById('quick-add-note').value = '';
+                        updateQuickAddConversionPreview();
+                        document.getElementById('quick-add-amount')?.focus();
+                    } else {
+                        closeModal(document.getElementById('quick-add-modal'));
+                        document.getElementById('form-quick-add').reset();
+                    }
+                } catch (err) {
+                    showToast('寫入失敗: ' + (err.message || err), 'error');
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalHtml;
+                        lucide.createIcons();
+                    }
+                }
+            });
+
             document.getElementById('form-edit-transaction')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const id = document.getElementById('edit-id')?.value;
@@ -1834,6 +2102,40 @@
                 }
             });
         }
+
+        window.openQuickAddModal = function() {
+            const modal = document.getElementById('quick-add-modal');
+            if (!modal) return;
+            const now = new Date();
+            const yearStr = now.getFullYear();
+            const monthStr = String(now.getMonth() + 1).padStart(2, '0');
+            const dayStr = String(now.getDate()).padStart(2, '0');
+            const todayStr = `${yearStr}-${monthStr}-${dayStr}`;
+            const timeStr = now.toTimeString().slice(0, 5);
+
+            const dateEl = document.getElementById('quick-add-date');
+            if (dateEl) dateEl.value = todayStr;
+            const timeEl = document.getElementById('quick-add-time');
+            if (timeEl) timeEl.value = timeStr;
+
+            const curEl = document.getElementById('quick-add-currency');
+            if (curEl && Array.from(curEl.options).some(o => o.value === currentBaseCurrency)) {
+                curEl.value = currentBaseCurrency;
+            }
+
+            openModal(modal);
+            const amtVal = parseFloat(document.getElementById('quick-add-amount')?.value) || 0;
+            const cur = document.getElementById('quick-add-currency')?.value || currentBaseCurrency;
+            const converted = convertCurrency(amtVal, cur, currentBaseCurrency);
+            const previewEl = document.getElementById('quick-add-preview-text');
+            if (previewEl) {
+                previewEl.textContent = `${formatMoney(converted, currentBaseCurrency)} (${currentBaseCurrency})`;
+            }
+
+            setTimeout(() => {
+                document.getElementById('quick-add-amount')?.focus();
+            }, 80);
+        };
 
         function openModal(modal) { if (modal) { modal.classList.remove('hidden'); modal.classList.add('flex'); } }
         function closeModal(modal) { if (modal) { modal.classList.remove('flex'); modal.classList.add('hidden'); } }
@@ -2412,6 +2714,25 @@
             const amountInput = document.getElementById('manual-view-amount');
             const currencySelect = document.getElementById('manual-view-currency');
 
+            function resetManualFormDefaults() {
+                const now = new Date();
+                const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                const timeStr = now.toTimeString().slice(0, 5);
+                const dateEl = document.getElementById('manual-view-date');
+                if (dateEl) dateEl.value = todayStr;
+                const timeEl = document.getElementById('manual-view-time');
+                if (timeEl) timeEl.value = timeStr;
+                const curEl = document.getElementById('manual-view-currency');
+                if (curEl && Array.from(curEl.options).some(o => o.value === currentBaseCurrency)) {
+                    curEl.value = currentBaseCurrency;
+                }
+                updateManualViewConversionPreview();
+            }
+
+            if (currencySelect && Array.from(currencySelect.options).some(o => o.value === currentBaseCurrency)) {
+                currencySelect.value = currentBaseCurrency;
+            }
+
             amountInput?.addEventListener('input', updateManualViewConversionPreview);
             currencySelect?.addEventListener('change', updateManualViewConversionPreview);
 
@@ -2436,8 +2757,10 @@
                         document.getElementById('manual-view-name').value = '';
                         document.getElementById('manual-view-amount').value = '';
                         document.getElementById('manual-view-note').value = '';
+                        updateManualViewConversionPreview();
                     } else {
                         form.reset();
+                        resetManualFormDefaults();
                         switchView('dashboard');
                     }
                     await fetchTransactions();
