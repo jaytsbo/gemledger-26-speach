@@ -1,0 +1,32 @@
+{
+  "name": "gemledger-26",
+  "version": "1.0.0",
+  "description": "Google Sheets 多幣別 AI 智慧記帳系統 (GAS + HTML5) 與 Gemini 3.5 Flash Lite 整合",
+  "scripts": {
+    "dev": "npx serve . -l 4173",
+    "login": "clasp login",
+    "logout": "clasp logout",
+    "create": "clasp create --type sheets",
+    "clone": "clasp clone",
+    "pull": "clasp pull",
+    "push": "clasp push",
+    "deploy": "clasp deploy",
+    "deployments": "clasp deployments",
+    "open": "clasp open",
+    "status": "clasp status"
+  },
+  "keywords": [
+    "google-apps-script",
+    "clasp",
+    "gemini-ai",
+    "gemini-3.5-flash-lite",
+    "bookkeeping",
+    "google-sheets"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@google/clasp": "^2.4.2",
+    "@types/google-apps-script": "^1.0.83"
+  }
+}

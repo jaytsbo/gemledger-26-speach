@@ -19,13 +19,32 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .eslintcache
+.cache/
+.turbo/
+coverage/
 
-# Local Environment Variables
+# Local Environment Variables & Secrets
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+
+# Clasp & Google Apps Script Credentials
+.clasp.json
+.clasprc.json
+
+# Service Accounts, API Keys & Secret Credentials
+*credential*.json
+*secret*.json
+service_account*.json
+*.pem
+*.key
+*.p12
+
+# Sensitive Financial Data & Spreadsheets (Keep template only)
+*.xlsx
+*.xls
+*.csv
+!記帳本.xlsx
 
 # Dependency directories (if any local node tools are used)
 node_modules/
@@ -35,3 +54,4 @@ jspm_packages/
 dist/
 build/
 out/
+

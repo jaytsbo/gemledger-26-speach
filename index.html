@@ -1072,8 +1072,17 @@
                     else if (msg.toLowerCase().includes('usd') || msg.includes('美金') || msg.includes('美元')) parsedCurrency = 'USD';
                     else if (msg.toLowerCase().includes('krw') || msg.includes('韓元')) parsedCurrency = 'KRW';
 
+                    const isSimulating503 = Boolean(window.SIMULATE_503 || localStorage.getItem('SIMULATE_503') === 'true');
+                    const replyMessage = isSimulating503
+                        ? "⚠️ Gemini 伺服器目前過載 (503 Service Unavailable)。系統已自動啟動【規則備援引擎】為您生成記帳草稿，請核對明細無誤後即可寫入："
+                        : `[本地開發環境 Mock] 已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`;
+                    const noteText = isSimulating503
+                        ? "由 503 備援離線規則引擎解析"
+                        : "本地端 Mock 智慧解析";
+
                     return {
-                        reply: `[本地開發環境 Mock] 已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`,
+                        reply: replyMessage,
+                        isFallback: isSimulating503,
                         parsedTransactions: [
                             {
                                 name: parsedName,
@@ -1083,7 +1092,7 @@
                                 account: defaultAcc,
                                 date: today,
                                 time: time,
-                                note: "本地端 Mock 智慧解析"
+                                note: noteText
                             }
                         ]
                     };

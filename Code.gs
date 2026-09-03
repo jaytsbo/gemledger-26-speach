@@ -431,16 +431,18 @@ function getExchangeRates() {
 
   const fallback = { base: "TWD", rates: { TWD: 1, USD: 0.03125, JPY: 4.65, KRW: 41.5, EUR: 0.0285, CNY: 0.225, GBP: 0.0245, HKD: 0.244, SGD: 0.0418, THB: 1.08, AUD: 0.0475 } };
   try {
-    const res = UrlFetchApp.fetch("https://open.er-api.com/v6/latest/TWD", { muteHttpExceptions: true });
-    if (res.getResponseCode() === 200) {
-      const json = JSON.parse(res.getContentText());
+    const fetchResult = fetchWithRetry("https://open.er-api.com/v6/latest/TWD", { muteHttpExceptions: true }, 2);
+    if (fetchResult.success && fetchResult.response) {
+      const json = JSON.parse(fetchResult.response.getContentText());
       if (json && json.rates) {
         const data = { base: "TWD", updated: json.time_last_update_utc || new Date().toISOString(), rates: json.rates };
-        cache.put('EXCHANGE_RATES_TWD', JSON.stringify(data), 21600);
+        cache.put('EXCHANGE_RATES_TWD', JSON.stringify(data), 21600); // 6 小時快取
         return data;
       }
     }
-  } catch (err) {}
+  } catch (err) {
+    console.warn("取得即時匯率異常，切換至靜態備援匯率:", err);
+  }
   return fallback;
 }
 
@@ -463,6 +465,174 @@ function promptSetApiKey() {
       ui.alert('✅ API Key 已成功儲存！');
     }
   }
+}
+
+/**
+ * 🔄 具備指數退避與 Jitter 的 HTTP 請求工具（有效應對 503/429/500/502/504 等暫時性過載異常）
+ */
+function fetchWithRetry(url, options, maxRetries = 3) {
+  let lastError = null;
+  let lastResponse = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = UrlFetchApp.fetch(url, options);
+      const code = res.getResponseCode();
+
+      // 2xx 成功直接返回
+      if (code >= 200 && code < 300) {
+        return { success: true, response: res, code: code };
+      }
+
+      lastResponse = res;
+
+      // 4xx 中非暫時性錯誤（例如 400 格式錯誤、401/403 憑證無效），不進行無效重試
+      if (code === 400 || code === 401 || code === 403 || code === 404) {
+        console.warn(`[API Client Error] 收到狀態碼 ${code}，略過重試。`);
+        return { success: false, response: res, code: code };
+      }
+
+      // 針對 429 (Rate Limit)、500、502、503 (Overloaded)、504 進行指數退避
+      if (attempt < maxRetries) {
+        const baseDelayMs = 1000 * Math.pow(2, attempt);
+        const jitterMs = Math.floor(Math.random() * 500);
+        const delayMs = Math.min(8000, baseDelayMs + jitterMs);
+        console.warn(`[API Retry] 收到狀態碼 ${code}，等待 ${delayMs}ms 進行第 ${attempt + 1}/${maxRetries} 次重試...`);
+        Utilities.sleep(delayMs);
+      }
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxRetries) {
+        const baseDelayMs = 1000 * Math.pow(2, attempt);
+        const jitterMs = Math.floor(Math.random() * 500);
+        const delayMs = Math.min(8000, baseDelayMs + jitterMs);
+        console.warn(`[API Network Retry] 連線異常 (${err.message})，等待 ${delayMs}ms 進行第 ${attempt + 1}/${maxRetries} 次重試...`);
+        Utilities.sleep(delayMs);
+      }
+    }
+  }
+
+  return { 
+    success: false, 
+    response: lastResponse, 
+    error: lastError, 
+    code: lastResponse ? lastResponse.getResponseCode() : 0 
+  };
+}
+
+/**
+ * 🛡️ 規則型備援解析器 (Rule-based Fallback Parser)
+ * 當 Gemini API 遭遇 503 伺服器過載、429 配額耗盡或連線異常且重試失敗時，
+ * 本地解析純文字輸入，確保使用者的記帳流程完全不中斷！
+ */
+function fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr) {
+  const msg = (userMessage || "").trim();
+  if (!msg) {
+    return {
+      reply: "⚠️ Gemini 伺服器目前負載過高 (503 Service Unavailable)，多模態圖像/語音辨識暫時無法連線。建議稍候 1~2 分鐘重試，或直接以文字輸入（例如：「午餐 120 現金」）快速記帳！",
+      parsedTransactions: [],
+      isFallback: true,
+      errorType: "503_OVERLOAD_NO_TEXT"
+    };
+  }
+
+  // 1. 解析金額數值
+  let amount = -100;
+  const numMatch = msg.match(/(\d+(?:\.\d+)?)/);
+  if (numMatch) {
+    const val = parseFloat(numMatch[1]);
+    if (!isNaN(val)) amount = -Math.abs(val);
+  }
+
+  // 2. 判斷正負號（收入性質 vs 支出性質）
+  const incomeKeywords = ["收入", "薪水", "薪資", "獎金", "配息", "股息", "退款", "代墊款歸還", "代墊回收", "利息", "領錢", "投資收益", "紅包"];
+  const isIncome = incomeKeywords.some(kw => msg.includes(kw));
+  if (isIncome) {
+    amount = Math.abs(amount);
+  }
+
+  // 3. 比對有效帳戶
+  const validAccounts = (settings.accounts && settings.accounts.length > 0) ? settings.accounts : ["現金"];
+  let matchedAccount = validAccounts[0];
+  for (let i = 0; i < validAccounts.length; i++) {
+    if (msg.includes(validAccounts[i])) {
+      matchedAccount = validAccounts[i];
+      break;
+    }
+  }
+
+  // 4. 比對有效分類
+  const validCategories = (settings.categories && settings.categories.length > 0) ? settings.categories : ["食", "收入"];
+  let matchedCategory = isIncome ? (validCategories.includes("收入") ? "收入" : validCategories[0]) : "食";
+  
+  // 先扣除已識別的帳戶名稱與常見干擾詞（如「銀行」），避免「永豐銀行」中的「行」被誤判為交通分類「行」
+  const cleanMsgForCat = msg.replace(new RegExp(matchedAccount, "g"), "").replace(/銀行|行動支付|分行/g, "");
+
+  for (let i = 0; i < validCategories.length; i++) {
+    const cat = validCategories[i];
+    if (cleanMsgForCat.includes(cat)) {
+      // 若已判斷為收入性質，僅接受收入/投資等相容分類覆蓋
+      if (isIncome && !["收入", "投資", "代墊回收", "初始資產"].includes(cat)) {
+        continue;
+      }
+      matchedCategory = cat;
+      break;
+    }
+  }
+
+  // 若未直接匹配分類，根據常見消費詞性做智慧推論（僅在非收入情境下推論支出分類）
+  if (!isIncome && matchedCategory === "食") {
+    if (/(捷運|公車|計程車|高鐵|火車|uber|加油|悠遊卡|車資|機票|停車)/i.test(cleanMsgForCat) && validCategories.includes("行")) {
+      matchedCategory = "行";
+    } else if (/(衣服|褲|鞋|襯衫|外套|買包|圍巾)/i.test(cleanMsgForCat) && validCategories.includes("衣")) {
+      matchedCategory = "衣";
+    } else if (/(房租|水電|瓦斯|管理費|家具|修繕)/i.test(cleanMsgForCat) && validCategories.includes("住")) {
+      matchedCategory = "住";
+    } else if (/(電影|遊戲|看展|演唱會|門票|唱歌|旅行|玩)/i.test(cleanMsgForCat) && validCategories.includes("育樂")) {
+      matchedCategory = "育樂";
+    } else if (/(書|課程|學費|補習|訂閱|chatgpt|伺服器)/i.test(cleanMsgForCat) && validCategories.includes("學習費用")) {
+      matchedCategory = "學習費用";
+    } else if (/(看診|看病|掛號|感冒|藥|保健品|體檢)/i.test(cleanMsgForCat) && validCategories.includes("醫療/雜項")) {
+      matchedCategory = "醫療/雜項";
+    }
+  }
+
+  // 5. 幣別判斷
+  let currency = "TWD";
+  if (/(jpy|日圓|日幣|円)/i.test(msg)) currency = "JPY";
+  else if (/(usd|美金|美元)/i.test(msg)) currency = "USD";
+  else if (/(krw|韓元|韓幣)/i.test(msg)) currency = "KRW";
+  else if (/(eur|歐元)/i.test(msg)) currency = "EUR";
+  else if (/(cny|rmb|人民幣)/i.test(msg)) currency = "CNY";
+  else if (/(gbp|英鎊)/i.test(msg)) currency = "GBP";
+
+  // 6. 項目名稱提煉
+  let cleanName = msg
+    .replace(/(\d+(?:\.\d+)?)/g, "")
+    .replace(/(jpy|usd|krw|eur|cny|gbp|twd|元|塊|日圓|日幣|美金|美元|台幣)/gi, "")
+    .replace(new RegExp(matchedAccount, "g"), "")
+    .replace(new RegExp(matchedCategory, "g"), "")
+    .replace(/[，,。！!？?\s]+/g, " ")
+    .trim();
+  if (!cleanName || cleanName.length < 1) cleanName = msg.slice(0, 15);
+
+  const fallbackTransaction = {
+    name: cleanName,
+    amount: amount,
+    currency: currency,
+    category: matchedCategory,
+    account: matchedAccount,
+    date: currentDateStr,
+    time: currentTimeStr,
+    note: "由 503 備援離線規則引擎解析"
+  };
+
+  return {
+    reply: "⚠️ Gemini API 雲端伺服器目前過載 (503 Service Unavailable)。系統已自動啟動【規則備援引擎】解析記帳草稿，請核對明細無誤後即可寫入：",
+    parsedTransactions: [fallbackTransaction],
+    isFallback: true,
+    fallbackReason: "503_SERVICE_UNAVAILABLE"
+  };
 }
 
 function callGeminiBookkeeper(userMessage, imageBase64, mimeType, autoSave = false) {
@@ -522,31 +692,49 @@ Output JSON schema:
     } 
   };
   
+  // 嚴格維持模型定義，遵循 Model Freezing 原則
   const model = "gemini-3.5-flash-lite";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
   
-  try {
-    const res = UrlFetchApp.fetch(url, { 
-      method: "post", 
-      contentType: "application/json", 
-      payload: JSON.stringify(payload), 
-      muteHttpExceptions: true 
-    });
-    
-    if (res.getResponseCode() === 200) {
-      const json = JSON.parse(res.getContentText());
-      const parsed = JSON.parse(json.candidates[0].content.parts[0].text);
-      const txs = parsed.transactions || [];
+  const fetchOptions = { 
+    method: "post", 
+    contentType: "application/json", 
+    payload: JSON.stringify(payload), 
+    muteHttpExceptions: true 
+  };
 
-      return { 
-        reply: parsed.reply || "解析成功！請核對以下記帳明細：", 
-        parsedTransactions: txs 
-      };
+  // 啟用指數退避重試
+  const fetchResult = fetchWithRetry(url, fetchOptions, 3);
+
+  if (fetchResult.success && fetchResult.response) {
+    try {
+      const json = JSON.parse(fetchResult.response.getContentText());
+      if (json && json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts) {
+        const parsed = JSON.parse(json.candidates[0].content.parts[0].text);
+        const txs = parsed.transactions || [];
+        return { 
+          reply: parsed.reply || "解析成功！請核對以下記帳明細：", 
+          parsedTransactions: txs 
+        };
+      }
+    } catch (parseErr) {
+      console.error("Gemini 輸出 JSON 解析錯誤:", parseErr);
     }
-    return { reply: "⚠️ 調用 Gemini API (gemini-3.5-flash-lite) 發生錯誤：" + res.getContentText(), parsedTransactions: [] };
-  } catch (err) { 
-    return { reply: "⚠️ 調用 Gemini API (gemini-3.5-flash-lite) 發生錯誤：" + err.toString(), parsedTransactions: [] };
   }
+
+  // 若遇到 503 Service Unavailable、429 配額耗盡或連線重試逾時，觸發 Fallback 備援降級
+  const statusCode = fetchResult.code;
+  if (statusCode === 503 || statusCode === 429 || statusCode === 500 || statusCode === 502 || statusCode === 504 || fetchResult.error) {
+    console.warn(`Gemini API 遭遇異常 (HTTP ${statusCode} / ${fetchResult.error})，啟動 Fallback 降級策略。`);
+    return fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr);
+  }
+
+  // 其它非 503 的客戶端錯誤（例如 400 或 403 API Key 無效）
+  const errDetail = fetchResult.response ? fetchResult.response.getContentText() : (fetchResult.error ? fetchResult.error.toString() : "未知錯誤");
+  return { 
+    reply: `⚠️ 調用 Gemini API (${model}) 發生錯誤 [HTTP ${statusCode}]：${errDetail}`, 
+    parsedTransactions: [] 
+  };
 }
 
 /**
@@ -694,3 +882,31 @@ function deleteCategoryCascade(categoryName) {
     lock.releaseLock();
   }
 }
+
+/**
+ * 🧪 [測試專用] 在 Apps Script 編輯器直接測試 503 伺服器過載與 Fallback 規則引擎
+ * 操作方式：在 Apps Script 編輯器上方函式選單選取「testGemini503Fallback」，點擊「執行」即可在執行紀錄中查看結果
+ */
+function testGemini503Fallback() {
+  console.log("=== 🧪 開始驗證 503 Fallback 規則型備援降級機制 ===");
+  const settings = getCustomSettings();
+  const timeZone = Session.getScriptTimeZone();
+  const currentDateStr = Utilities.formatDate(new Date(), timeZone, "yyyy-MM-dd");
+  const currentTimeStr = Utilities.formatDate(new Date(), timeZone, "HH:mm");
+
+  // 1. 測試文字支出與分類推論
+  const test1 = fallbackParseTransaction("中午跟同事吃拉麵 280 LINE Pay", settings, currentDateStr, currentTimeStr);
+  console.log("【測試 1：一般支出】", JSON.stringify(test1, null, 2));
+
+  // 2. 測試收入與帳戶防干擾
+  const test2 = fallbackParseTransaction("公司發放本月薪水 65000 永豐銀行", settings, currentDateStr, currentTimeStr);
+  console.log("【測試 2：薪資收入】", JSON.stringify(test2, null, 2));
+
+  // 3. 測試純多模態無文字時的降級提示
+  const test3 = fallbackParseTransaction("", settings, currentDateStr, currentTimeStr);
+  console.log("【測試 3：無文字/純多模態】", JSON.stringify(test3, null, 2));
+
+  console.log("=== ✅ 503 Fallback 機制驗證完成 ===");
+  return { test1, test2, test3 };
+}
+
