@@ -1877,15 +1877,45 @@
         let chatImageMime = 'image/jpeg';
         let chatImageName = '';
 
-        const chatMessages = [
-            {
-                id: 'welcome-msg',
-                role: 'ai',
-                time: new Date().toTimeString().slice(0, 5),
-                text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字、錄製語音或上傳發票收據照片，確認後即可一鍵寫入試算表！',
-                transactions: []
+        function saveChatMessagesToStorage() {
+            try {
+                const safeMessages = chatMessages.slice(-25).map(m => {
+                    if (m.image && m.image.length > 60000) {
+                        return { ...m, image: null, hasOmittedImage: true };
+                    }
+                    return m;
+                });
+                localStorage.setItem('GEMLEDGER_SAVED_CHAT_MESSAGES', JSON.stringify(safeMessages));
+            } catch (e) {
+                console.warn('儲存對話紀錄失敗:', e);
             }
-        ];
+        }
+
+        function loadChatMessagesFromStorage() {
+            try {
+                const saved = localStorage.getItem('GEMLEDGER_SAVED_CHAT_MESSAGES');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        const cleaned = parsed.filter(m => !m.isLoading);
+                        return cleaned.length > 0 ? cleaned : null;
+                    }
+                }
+            } catch (e) {
+                console.warn('載入對話紀錄失敗:', e);
+            }
+            return null;
+        }
+
+        const defaultWelcomeMsg = {
+            id: 'welcome-msg',
+            role: 'ai',
+            time: new Date().toTimeString().slice(0, 5),
+            text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字、錄製語音或上傳發票收據照片，確認後即可一鍵寫入試算表！',
+            transactions: []
+        };
+
+        const chatMessages = loadChatMessagesFromStorage() || [defaultWelcomeMsg];
 
         function compressImageFile(file, maxDimension = 1280, quality = 0.75) {
             return new Promise((resolve, reject) => {
@@ -1945,9 +1975,38 @@
                         text: '對話紀錄已清空。',
                         transactions: []
                     });
+                    localStorage.removeItem('GEMLEDGER_SAVED_CHAT_MESSAGES');
                     renderChatStream();
                 });
             }
+
+            // 手機切換背景 (Page Visibility) 喚醒感應
+            let lastHiddenTimestamp = 0;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') {
+                    lastHiddenTimestamp = Date.now();
+                } else if (document.visibilityState === 'visible') {
+                    const elapsed = Date.now() - lastHiddenTimestamp;
+                    // 若切到其他 App 超過 2.5 秒，手機 OS 會凍結網路。檢查是否有卡在 isLoading 的訊息，並自動轉為安全重試狀態
+                    const loadingIdx = chatMessages.findIndex(m => m.isLoading);
+                    if (loadingIdx !== -1 && elapsed > 2500) {
+                        const loadingMsg = chatMessages[loadingIdx];
+                        chatMessages.splice(loadingIdx, 1);
+                        chatMessages.push({
+                            id: 'ai-resume-' + Date.now(),
+                            role: 'ai',
+                            time: new Date().toTimeString().slice(0, 5),
+                            text: '📱 偵測到手機剛才切換至其他應用程式（如 Instagram/LINE），瀏覽器連線曾被系統暫停。您的輸入內容已妥善保留，請點擊下方按鈕立即接續辨識：',
+                            isRetryable: true,
+                            retryPayload: loadingMsg.originalPayload || null,
+                            transactions: []
+                        });
+                        saveChatMessagesToStorage();
+                        renderChatStream();
+                        showToast('已為您保留記帳內容，請點擊重試', 'info');
+                    }
+                }
+            });
 
             document.querySelectorAll('.chat-prompt-chip').forEach(chip => {
                 chip.addEventListener('click', () => {
@@ -2010,10 +2069,10 @@
                 audioInput.value = '';
             });
 
-            async function handleSendChatMessage(audioPayload = null) {
-                const text = (chatTextInput?.value || '').trim();
-                const image = chatImageBase64;
-                const mime = chatImageMime;
+            async function handleSendChatMessage(audioPayload = null, directText = null, directMedia = null, directMime = null) {
+                const text = directText !== null ? directText : (chatTextInput?.value || '').trim();
+                const image = directMedia !== null ? directMedia : chatImageBase64;
+                const mime = directMime !== null ? directMime : chatImageMime;
 
                 let mediaBase64 = image;
                 let mediaMime = mime;
@@ -2040,7 +2099,7 @@
                     isAudio: isAudio
                 });
 
-                if (chatTextInput) chatTextInput.value = '';
+                if (chatTextInput && directText === null) chatTextInput.value = '';
                 chatImageBase64 = null;
                 if (fileInput) fileInput.value = '';
                 imagePreviewBar?.classList.add('hidden');
@@ -2053,9 +2112,11 @@
                     time: new Date().toTimeString().slice(0, 5),
                     isLoading: true,
                     text: isAudio ? 'Gemini 3.5 正在聆聽語音辨識記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
+                    originalPayload: { text, mediaBase64, mediaMime, isAudio },
                     transactions: []
                 });
 
+                saveChatMessagesToStorage();
                 renderChatStream();
 
                 try {
@@ -2077,20 +2138,44 @@
                         text: res.reply || '已成功解析！請核對小卡並確認寫入：',
                         transactions: txsWithUid
                     });
+                    saveChatMessagesToStorage();
                     renderChatStream();
                 } catch (err) {
                     const idx = chatMessages.findIndex(m => m.id === loadingMsgId);
                     if (idx !== -1) chatMessages.splice(idx, 1);
+                    const errMsg = String(err?.message || err || '');
+                    const isBgOrNetError = document.visibilityState === 'hidden' || /network|scripterror|timeout|aborted|failed to fetch/i.test(errMsg);
+
+                    const tipText = isBgOrNetError
+                        ? '📱 偵測到切換應用程式或網路短暫中斷。您的記帳內容已安全暫存，請點擊下方按鈕立即重新解析：'
+                        : `辨識時發生錯誤：${errMsg}`;
+
                     chatMessages.push({
                         id: 'ai-err-' + Date.now(),
                         role: 'ai',
                         time: new Date().toTimeString().slice(0, 5),
-                        text: '辨識時發生錯誤：' + (err.message || err),
+                        text: tipText,
+                        isRetryable: true,
+                        retryPayload: { text, mediaBase64, mediaMime, isAudio },
                         transactions: []
                     });
+                    saveChatMessagesToStorage();
                     renderChatStream();
                 }
             }
+
+            window.retryChatMessage = function(msgId) {
+                const idx = chatMessages.findIndex(m => m.id === msgId);
+                if (idx === -1) return;
+                const item = chatMessages[idx];
+                const p = item.retryPayload;
+                chatMessages.splice(idx, 1);
+                saveChatMessagesToStorage();
+                renderChatStream();
+                if (p) {
+                    handleSendChatMessage(null, p.text, p.mediaBase64, p.mediaMime);
+                }
+            };
         }
 
         function renderChatStream() {
@@ -2118,6 +2203,25 @@
                         <div class="bg-white border border-teal-200 rounded-2xl rounded-tl-xs p-2.5 shadow-2xs text-xs text-teal-900 flex items-center gap-1.5">
                             <span class="w-2 h-2 rounded-full bg-teal-500 animate-ping"></span>
                             <span>${escapeHtml(msg.text)}</span>
+                        </div>
+                    </div>
+                    `;
+                }
+
+                if (msg.isRetryable) {
+                    return `
+                    <div class="flex items-start gap-2 max-w-[95%]">
+                        <div class="w-7 h-7 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5">
+                            <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
+                        </div>
+                        <div class="space-y-2 w-full">
+                            <div class="bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl rounded-tl-xs p-3 shadow-2xs text-xs space-y-2">
+                                <div class="whitespace-pre-line leading-relaxed">${escapeHtml(msg.text)}</div>
+                                <button type="button" onclick="retryChatMessage('${msg.id}')" class="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+                                    <span>🔄 立即重新辨識（免重複輸入）</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     `;
@@ -2242,6 +2346,7 @@
                     t.confirmed = true;
                     t.error = null;
                 });
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`已成功批次寫入 ${itemsToSave.length} 筆記帳紀錄！`, 'success');
                 await fetchTransactions();
@@ -2250,6 +2355,7 @@
                     t.isSubmitting = false;
                     t.error = (err && err.message) ? err.message : String(err);
                 });
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`批次寫入失敗: ${err.message || err}`, 'error');
             }
@@ -2293,12 +2399,14 @@
                 targetTx.isSubmitting = false;
                 targetTx.confirmed = true;
                 targetTx.error = null;
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`已成功寫入「${itemToSave.name}」！`, 'success');
                 await fetchTransactions();
             } catch (err) {
                 targetTx.isSubmitting = false;
                 targetTx.error = (err && err.message) ? err.message : String(err);
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`寫入失敗: ${targetTx.error}`, 'error');
             }
