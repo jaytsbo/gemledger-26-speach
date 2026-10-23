@@ -4,6 +4,7 @@
   "description": "Google Sheets 多幣別 AI 智慧記帳系統 (GAS + HTML5) 與 Gemini 3.5 Flash Lite 整合",
   "scripts": {
     "dev": "npx serve . -l 4173",
+    "build:report": "node docs/export_pdf.js",
     "login": "clasp login",
     "logout": "clasp logout",
     "create": "clasp create --type sheets",

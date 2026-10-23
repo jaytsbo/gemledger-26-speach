@@ -50,6 +50,7 @@ service_account*.json
 # Dependency directories (if any local node tools are used)
 node_modules/
 jspm_packages/
+docs/
 
 # Build outputs (if any)
 dist/
