@@ -114,30 +114,34 @@ function initSettingsSheet() {
   }
   if (rows.length > 0) sheet.getRange(2, 1, rows.length, 2).setValues(rows);
   sheet.setFrozenRows(1);
+  clearSheetDataCache();
   safeAlert('✅ 成功初始化「系統設定」工作表！');
 }
 
 const CACHE_KEY_SHEET_DATA = 'CACHE_SHEET_DATA_V1';
+const CACHE_KEY_SETTINGS = 'CACHE_CUSTOM_SETTINGS_V1';
 const CACHE_TTL_SECONDS = 300; // 5 分鐘快取
 
 function putLargeCache(key, dataArray, ttlSeconds) {
   const cache = CacheService.getScriptCache();
   try {
+    clearLargeCache(key);
     const jsonStr = JSON.stringify(dataArray);
     const chunkSize = 90 * 1024; // 90KB (safe under 100KB)
     
     if (jsonStr.length < chunkSize) {
-      cache.put(key, jsonStr, ttlSeconds);
-      cache.put(key + "_chunks", "1", ttlSeconds);
+      cache.putAll({ [key]: jsonStr, [key + "_chunks"]: "1" }, ttlSeconds);
+      console.log(`[Cache/putLargeCache] WriteSingle - Key:${key}, Bytes:${jsonStr.length}`);
       return;
     }
     
     const numChunks = Math.ceil(jsonStr.length / chunkSize);
+    const payload = { [key + "_chunks"]: String(numChunks) };
     for (let i = 0; i < numChunks; i++) {
-      const chunk = jsonStr.substring(i * chunkSize, (i + 1) * chunkSize);
-      cache.put(key + "_part_" + i, chunk, ttlSeconds);
+      payload[key + "_part_" + i] = jsonStr.substring(i * chunkSize, (i + 1) * chunkSize);
     }
-    cache.put(key + "_chunks", String(numChunks), ttlSeconds);
+    cache.putAll(payload, ttlSeconds);
+    console.log(`[Cache/putLargeCache] WriteChunked - Key:${key}, Chunks:${numChunks}, Bytes:${jsonStr.length}`);
   } catch (e) {
     console.warn("寫入分片快取失敗:", e);
   }
@@ -191,9 +195,20 @@ function clearLargeCache(key) {
 
 function clearSheetDataCache() {
   clearLargeCache(CACHE_KEY_SHEET_DATA);
+  try { CacheService.getScriptCache().remove(CACHE_KEY_SETTINGS); } catch (e) {}
+  console.log(`[Cache/clearSheetDataCache] ClearAll - Keys:${CACHE_KEY_SHEET_DATA},${CACHE_KEY_SETTINGS}`);
 }
 
 function getCustomSettings() {
+  const cache = CacheService.getScriptCache();
+  try {
+    const cached = cache.get(CACHE_KEY_SETTINGS);
+    if (cached) {
+      console.log(`[Settings/getCustomSettings] CacheHit - Key:${CACHE_KEY_SETTINGS}`);
+      return JSON.parse(cached);
+    }
+  } catch (e) {}
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const fallbackCurrencies = ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD'];
   let baseCurrency = 'TWD';
@@ -213,12 +228,15 @@ function getCustomSettings() {
     if (values[i][0]) accounts.push(String(values[i][0]).trim());
     if (values[i][1]) categories.push(String(values[i][1]).trim());
   }
-  return { 
+  const result = { 
     accounts: accounts.length > 0 ? accounts : ['現金'], 
     categories: categories.length > 0 ? categories : ['食', '收入'], 
     currencies: fallbackCurrencies,
     baseCurrency: baseCurrency
   };
+  try { cache.put(CACHE_KEY_SETTINGS, JSON.stringify(result), CACHE_TTL_SECONDS); } catch (e) {}
+  console.log(`[Settings/getCustomSettings] SheetRead - Accounts:${result.accounts.length}, Categories:${result.categories.length}`);
+  return result;
 }
 
 function saveCustomSettings(settings) {
@@ -250,6 +268,8 @@ function saveCustomSettings(settings) {
       }
     }
 
+    try { CacheService.getScriptCache().remove(CACHE_KEY_SETTINGS); } catch (e) {}
+    console.log(`[Settings/saveCustomSettings] Saved - Accounts:${accounts.length}, Categories:${categories.length}, Base:${settings.baseCurrency || 'N/A'}`);
     return { success: true, message: "已成功儲存自訂設定！" };
   } finally {
     lock.releaseLock();
@@ -789,149 +809,86 @@ Output JSON schema:
 }
 
 /**
- * 🗑️ 級聯刪除帳戶：同步刪除「系統設定」中的帳戶，並批次清除「記帳資料」中所有包含該帳戶的列
+ * 🗑️ 級聯刪除核心：同步刪除「系統設定」中的指定帳戶或分類，並批次清除「記帳資料」中所有關聯列
  */
-function deleteAccountCascade(accountName) {
+function _executeCascadeDelete(targetVal, settingsColIdx, accountingColIdx, label) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
 
   try {
-    const targetAccount = String(accountName || "").trim();
-    if (!targetAccount) throw new Error("未提供欲刪除的帳戶名稱");
+    const target = String(targetVal || "").trim();
+    if (!target) throw new Error(`未提供欲刪除的${label}名稱`);
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error("找不到試算表");
 
-    // 1. 從「系統設定」工作表移除帳戶
     const settingsSheet = ss.getSheetByName("系統設定");
     if (settingsSheet) {
       const settingsData = settingsSheet.getDataRange().getValues();
-      let newAccounts = [];
-      let existingCategories = [];
+      let accounts = [], categories = [];
       for (let i = 1; i < settingsData.length; i++) {
         const acc = String(settingsData[i][0] || "").trim();
         const cat = String(settingsData[i][1] || "").trim();
-        if (acc && acc !== targetAccount) newAccounts.push(acc);
-        if (cat) existingCategories.push(cat);
+        if (acc && (settingsColIdx !== 0 || acc !== target)) accounts.push(acc);
+        if (cat && (settingsColIdx !== 1 || cat !== target)) categories.push(cat);
       }
-      
       settingsSheet.clear();
       settingsSheet.getRange(1, 1, 1, 2).setValues([["帳戶清單", "分類清單"]]).setBackground("#1e293b").setFontColor("#ffffff").setFontWeight("bold");
       const rows = [];
-      for (let i = 0; i < Math.max(newAccounts.length, existingCategories.length); i++) {
-        rows.push([newAccounts[i] || "", existingCategories[i] || ""]);
+      for (let i = 0; i < Math.max(accounts.length, categories.length); i++) {
+        rows.push([accounts[i] || "", categories[i] || ""]);
       }
       if (rows.length > 0) settingsSheet.getRange(2, 1, rows.length, 2).setValues(rows);
       settingsSheet.setFrozenRows(1);
     }
 
-    // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
     const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
     let deletedRowsCount = 0;
-    if (accountingSheet && accountingSheet.getLastRow() > 1) {
-      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
+    const lastRow = accountingSheet ? accountingSheet.getLastRow() : 0;
+    if (accountingSheet && lastRow > 1) {
+      const totalDataRows = lastRow - 1;
+      const allRows = accountingSheet.getRange(2, 1, totalDataRows, 8).getValues();
       const remainingRows = allRows.filter(row => {
-        const rowAccount = String(row[2] || "").trim();
-        if (rowAccount === targetAccount) {
+        if (String(row[accountingColIdx] || "").trim() === target) {
           deletedRowsCount++;
           return false;
         }
         return true;
       });
 
-      // 清空原有資料列區域並批次寫回剩餘資料
-      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
-      if (remainingRows.length > 0) {
-        accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
+      if (deletedRowsCount > 0) {
+        accountingSheet.getRange(2, 1, totalDataRows, 8).clearContent();
+        if (remainingRows.length > 0) {
+          accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
+        }
+        if (deletedRowsCount < totalDataRows || remainingRows.length > 0) {
+          try { accountingSheet.deleteRows(2 + remainingRows.length, deletedRowsCount); } catch (e) {}
+        }
       }
     }
 
     SpreadsheetApp.flush();
     clearSheetDataCache();
+    console.log(`[Cascade/delete] Completed - Type:${label}, Target:${target}, DeletedRows:${deletedRowsCount}`);
 
     return {
       success: true,
       deletedCount: deletedRowsCount,
-      message: `已成功刪除帳戶「${targetAccount}」，並清除後端 ${deletedRowsCount} 筆關聯記帳記錄！`
+      message: `已成功刪除${label}「${target}」，並清除後端 ${deletedRowsCount} 筆關聯記帳記錄！`
     };
   } catch (error) {
-    throw new Error("級聯刪除帳戶失敗: " + error.message);
+    throw new Error(`級聯刪除${label}失敗: ` + error.message);
   } finally {
     lock.releaseLock();
   }
 }
 
-/**
- * 🗑️ 級聯刪除分類：同步刪除「系統設定」中的分類，並批次清除「記帳資料」中所有包含該分類的列
- */
+function deleteAccountCascade(accountName) {
+  return _executeCascadeDelete(accountName, 0, 2, "帳戶");
+}
+
 function deleteCategoryCascade(categoryName) {
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(10000)) throw new Error("系統繁忙中，請稍後再試（無法取得鎖定）");
-
-  try {
-    const targetCategory = String(categoryName || "").trim();
-    if (!targetCategory) throw new Error("未提供欲刪除的分類名稱");
-
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    if (!ss) throw new Error("找不到試算表");
-
-    // 1. 從「系統設定」工作表移除分類
-    const settingsSheet = ss.getSheetByName("系統設定");
-    if (settingsSheet) {
-      const settingsData = settingsSheet.getDataRange().getValues();
-      let existingAccounts = [];
-      let newCategories = [];
-      for (let i = 1; i < settingsData.length; i++) {
-        const acc = String(settingsData[i][0] || "").trim();
-        const cat = String(settingsData[i][1] || "").trim();
-        if (acc) existingAccounts.push(acc);
-        if (cat && cat !== targetCategory) newCategories.push(cat);
-      }
-      
-      settingsSheet.clear();
-      settingsSheet.getRange(1, 1, 1, 2).setValues([["帳戶清單", "分類清單"]]).setBackground("#1e293b").setFontColor("#ffffff").setFontWeight("bold");
-      const rows = [];
-      for (let i = 0; i < Math.max(existingAccounts.length, newCategories.length); i++) {
-        rows.push([existingAccounts[i] || "", newCategories[i] || ""]);
-      }
-      if (rows.length > 0) settingsSheet.getRange(2, 1, rows.length, 2).setValues(rows);
-      settingsSheet.setFrozenRows(1);
-    }
-
-    // 2. 批次更新「記帳資料」工作表（記憶體過濾後一次寫入，防止逐列刪除超時）
-    const accountingSheet = ss.getSheetByName("記帳資料") || ss.getActiveSheet();
-    let deletedRowsCount = 0;
-    if (accountingSheet && accountingSheet.getLastRow() > 1) {
-      const allRows = accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).getValues();
-      const remainingRows = allRows.filter(row => {
-        const rowCategory = String(row[4] || "").trim();
-        if (rowCategory === targetCategory) {
-          deletedRowsCount++;
-          return false;
-        }
-        return true;
-      });
-
-      // 清空原有資料列區域並批次寫回剩餘資料
-      accountingSheet.getRange(2, 1, accountingSheet.getLastRow() - 1, 8).clearContent();
-      if (remainingRows.length > 0) {
-        accountingSheet.getRange(2, 1, remainingRows.length, 8).setValues(remainingRows);
-      }
-    }
-
-    SpreadsheetApp.flush();
-    clearSheetDataCache();
-
-    return {
-      success: true,
-      deletedCount: deletedRowsCount,
-      message: `已成功刪除分類「${targetCategory}」，並清除後端 ${deletedRowsCount} 筆關聯記帳記錄！`
-    };
-  } catch (error) {
-    throw new Error("級聯刪除分類失敗: " + error.message);
-  } finally {
-    lock.releaseLock();
-  }
+  return _executeCascadeDelete(categoryName, 1, 4, "分類");
 }
 
 /**

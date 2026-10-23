@@ -793,10 +793,12 @@
 
         const ApiService = {
             _memoryCache: null,
+            _log: (fn, action, summary) => console.log(`[ApiService/${fn}] ${action} - ${summary}`),
 
             // 清除前端記憶體快取
             clearCache: () => {
                 ApiService._memoryCache = null;
+                ApiService._log('clearCache', 'Invalidate', 'MemoryCache reset to null');
             },
 
             // 1. 取得所有記帳流水帳明細
@@ -804,13 +806,16 @@
                 if (forceRefresh) {
                     ApiService.clearCache();
                 } else if (ApiService._memoryCache) {
+                    ApiService._log('getSheetData', 'CacheHit', `Rows:${ApiService._memoryCache.length}`);
                     return Promise.resolve(ApiService._memoryCache);
                 }
+                ApiService._log('getSheetData', 'Request', `Env:${isGasEnv ? 'GAS' : 'Local'}, Force:${forceRefresh}`);
                 if (isGasEnv) {
                     return new Promise((resolve, reject) => {
                         google.script.run
                             .withSuccessHandler(data => {
                                 ApiService._memoryCache = data;
+                                ApiService._log('getSheetData', 'Response', `GAS Rows:${(data || []).length}`);
                                 resolve(data);
                             })
                             .withFailureHandler(reject)
@@ -820,6 +825,7 @@
                 return mockDelay().then(() => {
                     const data = LocalStorageAdapter.getData();
                     ApiService._memoryCache = data;
+                    ApiService._log('getSheetData', 'Response', `Local Rows:${data.length}`);
                     return data;
                 });
             },
@@ -827,6 +833,7 @@
             // 2. 新增單筆交易紀錄
             addTransaction: (item) => {
                 ApiService.clearCache();
+                ApiService._log('addTransaction', 'Request', `Name:${item?.name}, Amt:${item?.amount} ${item?.currency}`);
                 if (isGasEnv) {
                     return new Promise((resolve, reject) => {
                         google.script.run
@@ -1454,11 +1461,14 @@
             strip.innerHTML = items || '<span class="text-slate-400">匯率就緒</span>';
         }
 
+        let persistedSettings = { accounts: [], categories: [] };
+
         async function fetchCustomSettings() {
             try {
                 const settings = await ApiService.getCustomSettings();
                 if (settings) {
                     customSettings = settings;
+                    persistedSettings = { accounts: [...(settings.accounts || [])], categories: [...(settings.categories || [])] };
                     localStorage.setItem('GEMLEDGER_SETTINGS_CACHE', JSON.stringify(settings));
 
                     // 若本地尚未記錄過偏好，或雲端有指定預設幣別，同步至當前基準幣別
@@ -1512,13 +1522,17 @@
                 if ((customSettings.categories || []).includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
             });
 
-            const quickCurrencyEl = document.getElementById('quick-add-currency');
-            if (quickCurrencyEl) {
-                const curVal = quickCurrencyEl.value || currentBaseCurrency;
-                quickCurrencyEl.innerHTML = (customSettings.currencies || ['TWD', 'EUR', 'USD', 'JPY', 'GBP', 'CNY', 'KRW', 'HKD', 'SGD', 'AUD', 'THB'])
-                    .map(c => `<option value="${c}">${c} ${getCurrencySymbol(c)}</option>`).join('');
-                if (curVal) quickCurrencyEl.value = curVal;
-            }
+            const currencies = customSettings.currencies || ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD'];
+            ['filter-currency', 'edit-currency', 'manual-view-currency', 'quick-add-currency'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                const isFilter = id === 'filter-currency';
+                const curVal = el.value || (isFilter ? 'ALL' : currentBaseCurrency);
+                el.innerHTML = (isFilter ? '<option value="ALL">全部幣別</option>' : '') +
+                    currencies.map(c => `<option value="${c}">${c} (${getCurrencySymbol(c).trim()})</option>`).join('');
+                if (currencies.includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
+            });
+            console.log(`[UI/populateSettingsOptions] SyncDropdowns - Accounts:${(customSettings.accounts || []).length}, Categories:${(customSettings.categories || []).length}, Currencies:${currencies.length}`);
         }
 
         function populateYearFilter() {
@@ -1564,13 +1578,26 @@
             const accountName = customSettings.accounts[idx];
             if (!accountName) return;
 
+            const isPersisted = (persistedSettings.accounts || []).includes(accountName);
+            if (!isPersisted) {
+                customSettings.accounts.splice(idx, 1);
+                renderSettingsModalLists();
+                console.log(`[Settings/removeAccount] RemoveUnsaved - Account:${accountName}`);
+                return showToast(`已移除尚未儲存的帳戶「${accountName}」`, 'info');
+            }
+
             const confirmed = confirm('刪除此項目將會一併清除後端所有包含該帳戶/分類的流水帳歷史記錄，確定刪除？');
             if (!confirmed) return;
 
+            const unsavedAccs = customSettings.accounts.filter(a => a !== accountName && !persistedSettings.accounts.includes(a));
+            const unsavedCats = customSettings.categories.filter(c => !persistedSettings.categories.includes(c));
             showToast(`正在刪除帳戶「${accountName}」及關聯歷史記錄...`, 'info');
             try {
                 const res = await ApiService.deleteAccountCascade(accountName);
                 await fetchCustomSettings();
+                customSettings.accounts.push(...unsavedAccs.filter(a => !customSettings.accounts.includes(a)));
+                customSettings.categories.push(...unsavedCats.filter(c => !customSettings.categories.includes(c)));
+                renderSettingsModalLists();
                 await fetchTransactions();
                 showToast(res?.message || `已成功刪除帳戶「${accountName}」並完成級聯清理！`, 'success');
             } catch (err) {
@@ -1583,13 +1610,26 @@
             const categoryName = customSettings.categories[idx];
             if (!categoryName) return;
 
+            const isPersisted = (persistedSettings.categories || []).includes(categoryName);
+            if (!isPersisted) {
+                customSettings.categories.splice(idx, 1);
+                renderSettingsModalLists();
+                console.log(`[Settings/removeCategory] RemoveUnsaved - Category:${categoryName}`);
+                return showToast(`已移除尚未儲存的分類「${categoryName}」`, 'info');
+            }
+
             const confirmed = confirm('刪除此項目將會一併清除後端所有包含該帳戶/分類的流水帳歷史記錄，確定刪除？');
             if (!confirmed) return;
 
+            const unsavedAccs = customSettings.accounts.filter(a => !persistedSettings.accounts.includes(a));
+            const unsavedCats = customSettings.categories.filter(c => c !== categoryName && !persistedSettings.categories.includes(c));
             showToast(`正在刪除分類「${categoryName}」及關聯歷史記錄...`, 'info');
             try {
                 const res = await ApiService.deleteCategoryCascade(categoryName);
                 await fetchCustomSettings();
+                customSettings.accounts.push(...unsavedAccs.filter(a => !customSettings.accounts.includes(a)));
+                customSettings.categories.push(...unsavedCats.filter(c => !customSettings.categories.includes(c)));
+                renderSettingsModalLists();
                 await fetchTransactions();
                 showToast(res?.message || `已成功刪除分類「${categoryName}」並完成級聯清理！`, 'success');
             } catch (err) {
@@ -1653,6 +1693,8 @@
                     document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
 
                     const res = await ApiService.saveCustomSettings(customSettings);
+                    persistedSettings = { accounts: [...(customSettings.accounts || [])], categories: [...(customSettings.categories || [])] };
+                    localStorage.setItem('GEMLEDGER_SETTINGS_CACHE', JSON.stringify(customSettings));
                     populateSettingsOptions();
                     closeModal(document.getElementById('settings-modal'));
                     applyFiltersAndRecompute();
@@ -1858,15 +1900,21 @@
                 const labels = Object.keys(catMap);
                 const data = labels.map(k => catMap[k]);
                 const colors = ['#0f766e', '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f59e0b', '#84cc16'];
-                if (categoryChartInstance) categoryChartInstance.destroy();
-                categoryChartInstance = new Chart(catCtx, {
-                    type: 'doughnut',
-                    data: {
-                        labels: labels.length ? labels : ['無支出'],
-                        datasets: [{ data: data.length ? data : [1], backgroundColor: data.length ? colors.slice(0, labels.length) : ['#e2e8f0'] }]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } } }
-                });
+                const catLabels = labels.length ? labels : ['無支出'];
+                const catData = data.length ? data : [1];
+                const catBg = data.length ? labels.map((_, i) => colors[i % colors.length]) : ['#e2e8f0'];
+                if (categoryChartInstance) {
+                    categoryChartInstance.data.labels = catLabels;
+                    categoryChartInstance.data.datasets[0].data = catData;
+                    categoryChartInstance.data.datasets[0].backgroundColor = catBg;
+                    categoryChartInstance.update();
+                } else {
+                    categoryChartInstance = new Chart(catCtx, {
+                        type: 'doughnut',
+                        data: { labels: catLabels, datasets: [{ data: catData, backgroundColor: catBg }] },
+                        options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } } }
+                    });
+                }
             }
 
             const acctCtx = document.getElementById('accountChart')?.getContext('2d');
@@ -1879,15 +1927,19 @@
                 });
                 const labels = Object.keys(acctMap).filter(k => Math.abs(acctMap[k]) > 0.01 || (customSettings.accounts || []).slice(0, 4).includes(k));
                 const data = labels.map(k => acctMap[k]);
-                if (accountChartInstance) accountChartInstance.destroy();
-                accountChartInstance = new Chart(acctCtx, {
-                    type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{ data: data, backgroundColor: data.map(v => v >= 0 ? '#10b981' : '#f43f5e'), borderRadius: 6 }]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
-                });
+                const acctBg = data.map(v => v >= 0 ? '#10b981' : '#f43f5e');
+                if (accountChartInstance) {
+                    accountChartInstance.data.labels = labels;
+                    accountChartInstance.data.datasets[0].data = data;
+                    accountChartInstance.data.datasets[0].backgroundColor = acctBg;
+                    accountChartInstance.update();
+                } else {
+                    accountChartInstance = new Chart(acctCtx, {
+                        type: 'bar',
+                        data: { labels: labels, datasets: [{ data: data, backgroundColor: acctBg, borderRadius: 6 }] },
+                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
+                    });
+                }
             }
 
             const trendCtx = document.getElementById('trendChart')?.getContext('2d');
@@ -1901,19 +1953,29 @@
                     else if (t.amount < 0 && t.category !== '內部轉帳') dateMap[d].expense += Math.abs(conv);
                 });
                 const sortedDates = Object.keys(dateMap).sort();
-                if (trendChartInstance) trendChartInstance.destroy();
-                trendChartInstance = new Chart(trendCtx, {
-                    type: 'bar',
-                    data: {
-                        labels: sortedDates.map(d => d.slice(5)),
-                        datasets: [
-                            { label: '收入', data: sortedDates.map(d => dateMap[d].income), backgroundColor: '#10b981', borderRadius: 4 },
-                            { label: '支出', data: sortedDates.map(d => dateMap[d].expense), backgroundColor: '#f43f5e', borderRadius: 4 }
-                        ]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
-                });
+                const trendLabels = sortedDates.map(d => d.slice(5));
+                const incData = sortedDates.map(d => dateMap[d].income);
+                const expData = sortedDates.map(d => dateMap[d].expense);
+                if (trendChartInstance) {
+                    trendChartInstance.data.labels = trendLabels;
+                    trendChartInstance.data.datasets[0].data = incData;
+                    trendChartInstance.data.datasets[1].data = expData;
+                    trendChartInstance.update();
+                } else {
+                    trendChartInstance = new Chart(trendCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: trendLabels,
+                            datasets: [
+                                { label: '收入', data: incData, backgroundColor: '#10b981', borderRadius: 4 },
+                                { label: '支出', data: expData, backgroundColor: '#f43f5e', borderRadius: 4 }
+                            ]
+                        },
+                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
+                    });
+                }
             }
+            console.log(`[Charts/_renderAllCharts] UpdateCharts - Filtered:${filteredTransactions.length}, Base:${currentBaseCurrency}`);
         }
 
         function renderTableAndPagination() {
@@ -1950,8 +2012,8 @@
                             <td class="col-note hidden md:table-cell py-2.5 px-4 text-slate-500 max-w-[150px] truncate">${escapeHtml(t.note || '-')}</td>
                             <td class="col-actions py-2.5 px-2 sm:px-4 whitespace-nowrap text-center">
                                 <div class="inline-flex items-center gap-1">
-                                    <button onclick="openEditModal(${t.id || t.rowNumber})" class="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors" title="編輯"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
-                                    <button onclick="deleteTransactionItem(${t.id || t.rowNumber})" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors" title="刪除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                                    <button onclick="openEditModal(${t.rowNumber || t.id})" class="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors" title="編輯"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
+                                    <button onclick="deleteTransactionItem(${t.rowNumber || t.id})" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors" title="刪除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
                                 </div>
                             </td>
                         </tr>
@@ -1994,6 +2056,16 @@
                     modal.addEventListener('click', (e) => {
                         if (e.target === modal) closeModal(modal);
                     });
+                }
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    ['quick-add-modal', 'edit-modal', 'settings-modal'].forEach(id => {
+                        const m = document.getElementById(id);
+                        if (m && !m.classList.contains('hidden')) closeModal(m);
+                    });
+                    document.getElementById('btn-close-sidebar')?.click();
                 }
             });
 
@@ -2081,6 +2153,9 @@
 
             document.getElementById('form-edit-transaction')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
+                const editForm = e.target;
+                const submitBtn = editForm.querySelector('button[type="submit"]');
+                const originalHtml = submitBtn ? submitBtn.innerHTML : '更新紀錄';
                 const id = document.getElementById('edit-id')?.value;
                 const updatedItem = {
                     date: document.getElementById('edit-date')?.value || '',
@@ -2092,6 +2167,11 @@
                     amount: parseFloat(document.getElementById('edit-amount')?.value) || 0,
                     note: document.getElementById('edit-note')?.value || ''
                 };
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = '更新中...';
+                }
+                console.log(`[Ledger/submitEdit] UpdateTransaction - Row:${id}, Acc:${updatedItem.account}, Cat:${updatedItem.category}`);
                 try {
                     const res = await ApiService.updateTransaction(id, updatedItem);
                     showToast(res?.message || '已成功更新紀錄！', 'success');
@@ -2099,6 +2179,11 @@
                     await fetchTransactions();
                 } catch (err) {
                     showToast('更新失敗: ' + (err.message || err), 'error');
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalHtml;
+                    }
                 }
             });
         }
@@ -2140,30 +2225,51 @@
         function openModal(modal) { if (modal) { modal.classList.remove('hidden'); modal.classList.add('flex'); } }
         function closeModal(modal) { if (modal) { modal.classList.remove('flex'); modal.classList.add('hidden'); } }
 
-        window.openEditModal = function(id) {
-            const item = rawTransactions.find(t => t.id === id || t.rowNumber === id);
+        window.openEditModal = function(rowNumberOrId) {
+            const item = rawTransactions.find(t => String(t.rowNumber) === String(rowNumberOrId) || String(t.id) === String(rowNumberOrId));
             if (!item) return;
-            document.getElementById('edit-id').value = item.id || item.rowNumber;
-            document.getElementById('edit-row-id').textContent = item.rowNumber || item.id;
+            populateSettingsOptions();
+            const ensureOption = (selectId, val) => {
+                const el = document.getElementById(selectId);
+                if (!el || !val) return;
+                if (!Array.from(el.options).some(o => o.value === val)) {
+                    const opt = document.createElement('option');
+                    opt.value = val;
+                    opt.textContent = `${val} (歷史項目)`;
+                    el.appendChild(opt);
+                    console.log(`[Ledger/openEditModal] InjectLegacyOption - Select:${selectId}, Value:${val}`);
+                }
+                el.value = val;
+            };
+            const targetRow = item.rowNumber || item.id;
+            document.getElementById('edit-id').value = targetRow;
+            document.getElementById('edit-row-id').textContent = targetRow;
             document.getElementById('edit-date').value = item.date || '';
             document.getElementById('edit-time').value = item.time || '';
             document.getElementById('edit-name').value = item.name || '';
-            document.getElementById('edit-account').value = item.account || '現金';
-            document.getElementById('edit-category').value = item.category || '食';
-            document.getElementById('edit-currency').value = (item.currency || 'TWD').toUpperCase();
+            ensureOption('edit-account', item.account || '現金');
+            ensureOption('edit-category', item.category || '食');
+            ensureOption('edit-currency', (item.currency || 'TWD').toUpperCase());
             document.getElementById('edit-amount').value = item.amount;
             document.getElementById('edit-note').value = item.note || '';
+            console.log(`[Ledger/openEditModal] Open - Row:${targetRow}, Name:${item.name}`);
             openModal(document.getElementById('edit-modal'));
         };
 
-        window.deleteTransactionItem = async function(id) {
+        let _isDeletingRow = false;
+        window.deleteTransactionItem = async function(rowNumberOrId) {
+            if (_isDeletingRow) return showToast('正在處理上一筆刪除請求，請稍候...', 'info');
             if (!confirm('確定要從試算表刪除此筆記帳明細嗎？')) return;
+            _isDeletingRow = true;
+            console.log(`[Ledger/deleteTransactionItem] Request - Row:${rowNumberOrId}`);
             try {
-                const res = await ApiService.deleteTransaction(id);
+                const res = await ApiService.deleteTransaction(rowNumberOrId);
                 showToast(res?.message || '已成功刪除記帳明細', 'success');
                 await fetchTransactions();
             } catch (err) {
                 showToast('刪除失敗: ' + (err.message || err), 'error');
+            } finally {
+                _isDeletingRow = false;
             }
         };
 
@@ -2555,12 +2661,34 @@
                         `;
                     } else {
                         actionContent = `
-                            <button type="button" onclick="confirmWriteTransaction('${tx.uid}')" id="btn-confirm-${tx.uid}" class="w-full py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-[11px] rounded-lg transition-all flex items-center justify-center gap-1">
-                                <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                                <span>確認寫入</span>
-                            </button>
+                            <div class="flex items-center gap-1.5">
+                                <button type="button" onclick="toggleDraftEdit('${tx.uid}')" class="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold text-[11px] rounded-lg transition-all flex items-center gap-1 shrink-0">
+                                    <i data-lucide="${tx.isEditing ? 'check' : 'pencil'}" class="w-3 h-3"></i>
+                                    <span>${tx.isEditing ? '完成' : '微調'}</span>
+                                </button>
+                                <button type="button" onclick="confirmWriteTransaction('${tx.uid}')" id="btn-confirm-${tx.uid}" class="flex-1 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-[11px] rounded-lg transition-all flex items-center justify-center gap-1">
+                                    <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                                    <span>確認寫入</span>
+                                </button>
+                            </div>
                         `;
                     }
+
+                    const editPanelHtml = (!tx.confirmed && tx.isEditing) ? `
+                        <div class="grid grid-cols-2 gap-1.5 pt-2 border-t border-slate-200/80 text-[11px]">
+                            <input type="text" value="${escapeHtml(tx.name || '')}" onchange="updateDraftTx('${tx.uid}','name',this.value)" placeholder="項目名稱" class="col-span-2 bg-white border border-slate-200 rounded-lg px-2 py-1 text-slate-800">
+                            <input type="number" step="any" value="${tx.amount}" onchange="updateDraftTx('${tx.uid}','amount',this.value)" placeholder="金額(負支出/正收入)" class="bg-white border border-slate-200 rounded-lg px-2 py-1 font-mono font-bold text-slate-800">
+                            <select onchange="updateDraftTx('${tx.uid}','currency',this.value)" class="bg-white border border-slate-200 rounded-lg px-1.5 py-1 font-mono text-slate-800">
+                                ${(customSettings.currencies || ['TWD','JPY','USD','KRW','EUR','CNY','GBP','HKD','SGD','THB','AUD']).map(c => `<option value="${c}" ${(tx.currency||'TWD').toUpperCase()===c?'selected':''}>${c}</option>`).join('')}
+                            </select>
+                            <select onchange="updateDraftTx('${tx.uid}','account',this.value)" class="bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-slate-800">
+                                ${(customSettings.accounts || ['現金']).map(a => `<option value="${escapeHtml(a)}" ${tx.account===a?'selected':''}>${escapeHtml(a)}</option>`).join('')}
+                            </select>
+                            <select onchange="updateDraftTx('${tx.uid}','category',this.value)" class="bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-slate-800">
+                                ${(customSettings.categories || ['食']).map(c => `<option value="${escapeHtml(c)}" ${tx.category===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+                            </select>
+                        </div>
+                    ` : '';
 
                     return `
                     <div class="border border-slate-200 bg-slate-50 rounded-xl p-3 space-y-2 text-xs" id="card-${tx.uid}">
@@ -2574,6 +2702,7 @@
                                 <div class="text-[10px] text-slate-400 font-mono">≈ ${formatMoney(convertedAmount, currentBaseCurrency)}</div>
                             </div>
                         </div>
+                        ${editPanelHtml}
                         <div class="pt-1 border-t border-slate-200" id="card-action-${tx.uid}">
                             ${actionContent}
                         </div>
@@ -2612,6 +2741,28 @@
             lucide.createIcons();
             setTimeout(() => { stream.scrollTop = stream.scrollHeight; }, 50);
         }
+
+        window.toggleDraftEdit = function(uid) {
+            for (const msg of chatMessages) {
+                const tx = (msg.transactions || []).find(t => t.uid === uid);
+                if (tx) { tx.isEditing = !tx.isEditing; break; }
+            }
+            saveChatMessagesToStorage();
+            renderChatStream();
+        };
+
+        window.updateDraftTx = function(uid, field, val) {
+            for (const msg of chatMessages) {
+                const tx = (msg.transactions || []).find(t => t.uid === uid);
+                if (tx) {
+                    tx[field] = field === 'amount' ? (parseFloat(val) || 0) : String(val).trim();
+                    console.log(`[AIChat/updateDraftTx] FieldUpdated - UID:${uid}, ${field}:${tx[field]}`);
+                    break;
+                }
+            }
+            saveChatMessagesToStorage();
+            renderChatStream();
+        };
 
         window.confirmWriteAllTransactions = async function(msgId) {
             const msg = chatMessages.find(m => m.id === msgId);
@@ -2736,8 +2887,16 @@
             amountInput?.addEventListener('input', updateManualViewConversionPreview);
             currencySelect?.addEventListener('change', updateManualViewConversionPreview);
 
+            document.getElementById('btn-manual-view-reset')?.addEventListener('click', () => {
+                form?.reset();
+                resetManualFormDefaults();
+                console.log('[ManualForm/reset] ResetForm - Cleared fields and restored defaults');
+            });
+
             form?.addEventListener('submit', async (e) => {
                 e.preventDefault();
+                const submitBtn = form.querySelector('button[type="submit"]');
+                const originalHtml = submitBtn ? submitBtn.innerHTML : '';
                 const continuous = document.getElementById('manual-continuous-mode')?.checked;
                 const newItem = {
                     date: document.getElementById('manual-view-date').value,
@@ -2749,6 +2908,13 @@
                     amount: parseFloat(document.getElementById('manual-view-amount').value) || 0,
                     note: document.getElementById('manual-view-note').value.trim()
                 };
+
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>寫入中...</span>`;
+                    lucide.createIcons();
+                }
+                console.log(`[ManualForm/submit] AddTransaction - Input: ${newItem.name} (${newItem.amount} ${newItem.currency})`);
 
                 try {
                     const res = await ApiService.addTransaction(newItem);
@@ -2766,6 +2932,12 @@
                     await fetchTransactions();
                 } catch (err) {
                     showToast('寫入失敗: ' + (err.message || err), 'error');
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalHtml;
+                        lucide.createIcons();
+                    }
                 }
             });
         }
