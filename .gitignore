@@ -45,6 +45,7 @@ service_account*.json
 *.xls
 *.csv
 !記帳本.xlsx
+*.pdf
 
 # Dependency directories (if any local node tools are used)
 node_modules/
