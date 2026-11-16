@@ -1,0 +1,11 @@
+name = "gemledger-ai-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-02-01"
+
+[observability]
+enabled = true
+
+# Configure GEMINI_API_KEY securely as a Worker secret (never commit keys here):
+#   npx wrangler secret put GEMINI_API_KEY
+# For local `wrangler dev`, create ai-proxy/.dev.vars with:
+#   GEMINI_API_KEY=your_gemini_api_key_here
