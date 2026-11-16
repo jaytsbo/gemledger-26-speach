@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "GemLedger-26",
+    "slug": "gemledger-26",
+    "version": "2.0.0",
+    "orientation": "portrait",
+    "scheme": "gemledger",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gemledger.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "GemLedger-26 需要存取相機以拍攝收據或發票進行 AI 智慧辨識記帳。",
+        "NSPhotoLibraryUsageDescription": "GemLedger-26 需要存取相簿以選擇收據照片進行 AI 智慧辨識記帳。"
+      }
+    },
+    "android": {
+      "package": "com.gemledger.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "允許 GemLedger-26 存取相簿以選擇收據進行 AI 辨識記帳。",
+          "cameraPermission": "允許 GemLedger-26 使用相機拍攝收據進行 AI 辨識記帳。"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

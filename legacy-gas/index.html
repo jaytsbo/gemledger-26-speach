@@ -164,7 +164,7 @@
                         <span>系統設定</span>
                     </button>
 
-                    <button id="btn-open-manual-modal" class="inline-flex items-center gap-1 px-2.5 sm:px-3.5 py-1.5 text-xs font-medium text-white bg-teal-700 hover:bg-teal-800 rounded-xl shadow-xs shadow-teal-700/20 transition-all">
+                    <button id="btn-header-quick-add" class="inline-flex items-center gap-1 px-2.5 sm:px-3.5 py-1.5 text-xs font-medium text-white bg-teal-700 hover:bg-teal-800 rounded-xl shadow-xs shadow-teal-700/20 transition-all cursor-pointer" title="切換至手動記帳">
                         <i data-lucide="plus" class="w-3.5 h-3.5"></i>
                         <span class="hidden sm:inline">記一筆</span>
                     </button>
@@ -522,56 +522,94 @@
     </main>
 
     <!-- Modals -->
-    <div id="manual-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 hidden items-center justify-center p-3 sm:p-4">
-        <div class="bg-white rounded-2xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-slate-100 max-h-[92vh] overflow-y-auto">
-            <div class="flex items-center justify-between pb-3 border-b border-slate-100">
-                <h3 class="text-sm sm:text-base font-bold text-slate-900">手動新增記帳明細</h3>
-                <button class="modal-close p-1 text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
+
+    <!-- ⚡ Quick Add Transaction Modal (半透明浮動記帳視窗，可透視後方帳務) -->
+    <div id="quick-add-modal" class="fixed inset-0 bg-slate-950/20 backdrop-blur-[1.5px] z-50 hidden items-center justify-center p-3 sm:p-4 transition-all">
+        <div class="bg-white/92 backdrop-blur-xl rounded-3xl max-w-lg w-full p-4 sm:p-6 shadow-2xl border border-white/70 ring-1 ring-black/5 max-h-[92vh] overflow-y-auto transform transition-all">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-200/60">
+                <div class="flex items-center gap-2">
+                    <div class="w-8 h-8 rounded-xl bg-teal-600/15 text-teal-700 flex items-center justify-center font-bold">
+                        <i data-lucide="plus-circle" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-sm sm:text-base font-bold text-slate-900">快速記一筆</h3>
+                        <p class="text-[10px] text-slate-500">透明懸浮視窗，可直接對照後方帳務明細</p>
+                    </div>
+                </div>
+                <button type="button" class="modal-close p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100/60 rounded-xl transition-all">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
             </div>
-            <form id="form-manual-add" class="space-y-3.5 pt-3.5 text-xs">
+
+            <form id="form-quick-add" class="space-y-3.5 pt-3.5 text-xs">
                 <div class="grid grid-cols-2 gap-2.5">
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">交易日期</label>
-                        <input id="add-date" type="date" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-800">
+                        <input id="quick-add-date" type="date" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-1.5 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none">
                     </div>
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">交易時間</label>
-                        <input id="add-time" type="time" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-800">
+                        <input id="quick-add-time" type="time" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-1.5 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none">
                     </div>
                 </div>
+
                 <div>
                     <label class="block font-semibold text-slate-700 mb-1">項目名稱</label>
-                    <input id="add-name" type="text" placeholder="例如：一蘭拉麵" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800">
+                    <input id="quick-add-name" type="text" placeholder="例如：星巴克拿鐵、超市採買" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none placeholder:text-slate-400">
                 </div>
+
                 <div class="grid grid-cols-2 gap-2.5">
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">支付帳戶</label>
-                        <select id="add-account" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800"></select>
+                        <select id="quick-add-account" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none"></select>
                     </div>
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">分類標籤</label>
-                        <select id="add-category" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800"></select>
+                        <select id="quick-add-category" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none"></select>
                     </div>
                 </div>
+
                 <div class="grid grid-cols-2 gap-2.5">
                     <div>
                         <label class="block font-semibold text-slate-700 mb-1">幣別代碼</label>
-                        <select id="add-currency" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800">
-                            <option value="TWD">TWD 新台幣</option><option value="JPY">JPY 日圓</option><option value="USD">USD 美元</option>
-                        </select>
+                        <select id="quick-add-currency" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 font-medium focus:ring-2 focus:ring-teal-600/20 focus:outline-none"></select>
                     </div>
                     <div>
-                        <label class="block font-semibold text-slate-700 mb-1">金額 (支出負/收入正)</label>
-                        <input id="add-amount" type="number" step="any" placeholder="-120 或 5000" required class="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-2 text-slate-800 font-mono">
+                        <label class="block font-semibold text-slate-700 mb-1 flex items-center justify-between">
+                            <span>交易金額</span>
+                            <span class="text-[10px] text-slate-400 font-normal">支出請填負數</span>
+                        </label>
+                        <div class="relative">
+                            <input id="quick-add-amount" type="number" step="any" placeholder="-65" required class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-2.5 py-2 text-slate-800 font-mono text-sm font-semibold focus:ring-2 focus:ring-teal-600/20 focus:outline-none">
+                            <button type="button" id="btn-quick-add-toggle-sign" class="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] rounded-md font-mono cursor-pointer" title="快速切換正負號">+/-</button>
+                        </div>
                     </div>
                 </div>
-                <div>
-                    <label class="block font-semibold text-slate-700 mb-1">備註細節</label>
-                    <input id="add-note" type="text" placeholder="選填" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-800">
+
+                <!-- 即時折算提示 -->
+                <div id="quick-add-conversion-preview" class="p-2.5 bg-teal-50/70 border border-teal-200/60 rounded-xl text-teal-800 flex items-center justify-between text-[11px] font-mono">
+                    <span>基準幣別折算:</span>
+                    <span id="quick-add-preview-text" class="font-bold">0.00</span>
                 </div>
-                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                    <button type="button" class="modal-close px-3.5 py-1.5 text-slate-600 hover:bg-slate-100 rounded-xl">取消</button>
-                    <button type="submit" class="px-4 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-semibold rounded-xl">儲存入帳</button>
+
+                <div>
+                    <label class="block font-semibold text-slate-700 mb-1">備註細節 (可選)</label>
+                    <input id="quick-add-note" type="text" placeholder="選填，例如：統編、分帳明細" class="w-full bg-white/80 border border-slate-200/90 rounded-xl px-3 py-2 text-slate-800 focus:ring-2 focus:ring-teal-600/20 focus:outline-none placeholder:text-slate-400">
+                </div>
+
+                <div class="flex items-center justify-between pt-2">
+                    <label class="flex items-center gap-2 cursor-pointer text-slate-600 select-none">
+                        <input id="quick-add-continuous-mode" type="checkbox" class="rounded text-teal-700 focus:ring-teal-600 w-3.5 h-3.5">
+                        <span class="text-[11px] font-medium">連續記帳模式 (儲存後不關閉)</span>
+                    </label>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-200/60">
+                    <button type="button" class="modal-close px-4 py-2 text-slate-600 hover:bg-slate-100/70 rounded-xl transition-all font-medium cursor-pointer">取消</button>
+                    <button id="btn-submit-quick-add" type="submit" class="px-5 py-2 bg-gradient-to-r from-teal-700 to-emerald-600 hover:from-teal-800 hover:to-emerald-700 text-white font-bold rounded-xl shadow-xs shadow-teal-700/20 transition-all flex items-center gap-1.5 cursor-pointer">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                        <span>確認寫入</span>
+                    </button>
                 </div>
             </form>
         </div>
@@ -642,6 +680,25 @@
                 <button class="modal-close p-1 text-slate-400 hover:text-slate-600"><i data-lucide="x" class="w-5 h-5"></i></button>
             </div>
             <div class="space-y-4 pt-3.5 text-xs">
+                <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                    <label class="font-bold text-slate-800 flex items-center justify-between">
+                        <span>預設基準貨幣 (Default Base Currency)</span>
+                        <span class="text-[10px] text-teal-700 font-normal">開啟 APP 時以此幣別自動折算呈現</span>
+                    </label>
+                    <select id="settings-base-currency" class="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-800 font-medium">
+                        <option value="TWD">TWD 新台幣 (NT$)</option>
+                        <option value="EUR">EUR 歐元 (€)</option>
+                        <option value="USD">USD 美元 ($)</option>
+                        <option value="JPY">JPY 日圓 (¥)</option>
+                        <option value="GBP">GBP 英鎊 (£)</option>
+                        <option value="CNY">CNY 人民幣 (¥)</option>
+                        <option value="KRW">KRW 韓元 (₩)</option>
+                        <option value="HKD">HKD 港幣 (HK$)</option>
+                        <option value="SGD">SGD 新加坡幣 (S$)</option>
+                        <option value="AUD">AUD 澳幣 (A$)</option>
+                        <option value="THB">THB 泰銖 (฿)</option>
+                    </select>
+                </div>
                 <div>
                     <label class="font-bold text-slate-800 block mb-1.5">帳戶清單</label>
                     <div id="settings-accounts-list" class="flex flex-wrap gap-1.5 p-2.5 bg-slate-50 border border-slate-200 rounded-xl min-h-[44px] mb-2"></div>
@@ -683,7 +740,8 @@
         const DEFAULT_SETTINGS = {
             accounts: ['現金', 'LINE Pay', 'LINE Bank', '郵局', '永豐銀行', '國泰世華', '玉山銀行', '悠遊卡', '街口支付', '台新Richart'],
             categories: ['食', '衣', '住', '行', '育樂', '學習費用', '醫療/雜項', '收入', '投資', '初始資產', '代墊款', '代墊回收', '內部轉帳'],
-            currencies: ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD']
+            currencies: ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD'],
+            baseCurrency: 'TWD'
         };
 
         function getMockDefaultTransactions() {
@@ -735,10 +793,12 @@
 
         const ApiService = {
             _memoryCache: null,
+            _log: (fn, action, summary) => console.log(`[ApiService/${fn}] ${action} - ${summary}`),
 
             // 清除前端記憶體快取
             clearCache: () => {
                 ApiService._memoryCache = null;
+                ApiService._log('clearCache', 'Invalidate', 'MemoryCache reset to null');
             },
 
             // 1. 取得所有記帳流水帳明細
@@ -746,13 +806,16 @@
                 if (forceRefresh) {
                     ApiService.clearCache();
                 } else if (ApiService._memoryCache) {
+                    ApiService._log('getSheetData', 'CacheHit', `Rows:${ApiService._memoryCache.length}`);
                     return Promise.resolve(ApiService._memoryCache);
                 }
+                ApiService._log('getSheetData', 'Request', `Env:${isGasEnv ? 'GAS' : 'Local'}, Force:${forceRefresh}`);
                 if (isGasEnv) {
                     return new Promise((resolve, reject) => {
                         google.script.run
                             .withSuccessHandler(data => {
                                 ApiService._memoryCache = data;
+                                ApiService._log('getSheetData', 'Response', `GAS Rows:${(data || []).length}`);
                                 resolve(data);
                             })
                             .withFailureHandler(reject)
@@ -762,6 +825,7 @@
                 return mockDelay().then(() => {
                     const data = LocalStorageAdapter.getData();
                     ApiService._memoryCache = data;
+                    ApiService._log('getSheetData', 'Response', `Local Rows:${data.length}`);
                     return data;
                 });
             },
@@ -769,6 +833,7 @@
             // 2. 新增單筆交易紀錄
             addTransaction: (item) => {
                 ApiService.clearCache();
+                ApiService._log('addTransaction', 'Request', `Name:${item?.name}, Amt:${item?.amount} ${item?.currency}`);
                 if (isGasEnv) {
                     return new Promise((resolve, reject) => {
                         google.script.run
@@ -916,7 +981,8 @@
                     const updated = {
                         ...current,
                         accounts: (settings.accounts || []).map(a => String(a).trim()).filter(Boolean),
-                        categories: (settings.categories || []).map(c => String(c).trim()).filter(Boolean)
+                        categories: (settings.categories || []).map(c => String(c).trim()).filter(Boolean),
+                        baseCurrency: settings.baseCurrency ? String(settings.baseCurrency).trim().toUpperCase() : (current.baseCurrency || 'TWD')
                     };
                     LocalStorageAdapter.saveSettings(updated);
                     return { success: true, message: "已成功儲存自訂設定！" };
@@ -1072,10 +1138,24 @@
                     else if (msg.toLowerCase().includes('usd') || msg.includes('美金') || msg.includes('美元')) parsedCurrency = 'USD';
                     else if (msg.toLowerCase().includes('krw') || msg.includes('韓元')) parsedCurrency = 'KRW';
 
+                    const cascadeModel = window.SIMULATE_CASCADE || localStorage.getItem('SIMULATE_CASCADE');
+                    const isSimulating503 = Boolean(window.SIMULATE_503 || localStorage.getItem('SIMULATE_503') === 'true');
+
+                    let replyMessage = `[本地開發環境 Mock] 已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`;
+                    let noteText = "本地端 Mock 智慧解析";
+
+                    if (cascadeModel) {
+                        replyMessage = `⚡ [注意：由於 gemini-3.5-flash-lite 觸發每分鐘限制 (429) 或超過 8 秒，系統已自動切換至 ${cascadeModel} 完成解析！]\n\n解析成功！請核對以下小卡並確認寫入：`;
+                        noteText = `切換至 ${cascadeModel} 備援解析`;
+                    } else if (isSimulating503) {
+                        replyMessage = "⚠️ Gemini 伺服器目前過載 (503 Service Unavailable)。系統已自動啟動【規則備援引擎】為您生成記帳草稿，請核對明細無誤後即可寫入：";
+                        noteText = "由 503 備援離線規則引擎解析";
+                    }
+
                     return {
-                        reply: isAudio 
-                            ? `[本地 Mock - Gemini 3.5 Transcribe] 已成功轉譯語音「${parsedName}」！請核對小卡並確認寫入：`
-                            : `[本地 Mock - Gemini 3.5 Flash Lite] 已成功模擬解析「${parsedName}」！請核對小卡並確認寫入：`,
+                        reply: replyMessage,
+                        isFallback: isSimulating503,
+                        modelUsed: cascadeModel || "gemini-3.5-flash-lite",
                         parsedTransactions: [
                             {
                                 name: parsedName,
@@ -1085,7 +1165,7 @@
                                 account: defaultAcc,
                                 date: today,
                                 time: time,
-                                note: "本地端 Mock 智慧解析"
+                                note: noteText
                             }
                         ]
                     };
@@ -1165,6 +1245,64 @@
             return `${amount < 0 ? '-' : ''}${sym}${formatted}`;
         }
 
+        // =========================================================================
+        // ⚡ SWR (Stale-While-Revalidate) 本地 0ms 秒開快取引擎
+        // =========================================================================
+        function loadCachedStateAndRender() {
+            let hasData = false;
+            try {
+                // 1. 立即讀取匯率快取
+                const cachedRates = localStorage.getItem('GEMLEDGER_EXCHANGE_RATES_CACHE');
+                if (cachedRates) {
+                    const parsed = JSON.parse(cachedRates);
+                    if (parsed && parsed.rates) {
+                        exchangeRates = parsed;
+                        renderExchangeRatesStrip();
+                    }
+                }
+
+                // 2. 立即讀取設定快取
+                const cachedSettings = localStorage.getItem('GEMLEDGER_SETTINGS_CACHE') || localStorage.getItem('MOCK_CUSTOM_SETTINGS');
+                if (cachedSettings) {
+                    const parsed = JSON.parse(cachedSettings);
+                    if (parsed && (parsed.accounts || parsed.categories)) {
+                        customSettings = parsed;
+                        populateSettingsOptions();
+                        renderSettingsModalLists();
+                    }
+                }
+
+                // 3. 立即讀取流水帳歷史資料（保障總資產與各帳戶餘額 0ms 精確呈現）
+                const cachedData = localStorage.getItem('GEMLEDGER_CLIENT_DATA_CACHE') || localStorage.getItem('MOCK_SHEET_DATA');
+                if (cachedData) {
+                    const parsed = JSON.parse(cachedData);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        rawTransactions = parsed;
+                        populateYearFilter();
+                        applyFiltersAndRecompute();
+                        hasData = true;
+                        console.log(`[SWR] ⚡ 0ms 秒開快取載入成功，首屏瞬時呈現 ${parsed.length} 筆資料`);
+                    }
+                }
+
+                // 4. 立即讀取使用者預設基準貨幣偏好 (支援 EUR、USD、JPY 等自訂偏好持久化)
+                const savedCurrency = localStorage.getItem('GEMLEDGER_BASE_CURRENCY') || (customSettings && customSettings.baseCurrency) || 'TWD';
+                currentBaseCurrency = savedCurrency;
+                const baseSelect = document.getElementById('base-currency-select');
+                if (baseSelect) baseSelect.value = currentBaseCurrency;
+                const settingsBase = document.getElementById('settings-base-currency');
+                if (settingsBase) settingsBase.value = currentBaseCurrency;
+                const manualCurEl = document.getElementById('manual-view-currency');
+                if (manualCurEl && Array.from(manualCurEl.options).some(o => o.value === currentBaseCurrency)) {
+                    manualCurEl.value = currentBaseCurrency;
+                }
+                document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
+            } catch (e) {
+                console.warn('[SWR] 本地快取讀取異常:', e);
+            }
+            return hasData;
+        }
+
         document.addEventListener('DOMContentLoaded', async () => {
             lucide.createIcons();
             initSidebarDrawer();
@@ -1175,14 +1313,37 @@
             initSettingsUI();
 
             const now = new Date();
-            const todayStr = now.toISOString().split('T')[0];
+            const yearStr = now.getFullYear();
+            const monthStr = String(now.getMonth() + 1).padStart(2, '0');
+            const dayStr = String(now.getDate()).padStart(2, '0');
+            const todayStr = `${yearStr}-${monthStr}-${dayStr}`;
             const timeStr = now.toTimeString().slice(0, 5);
-            ['add-date', 'manual-view-date'].forEach(id => { const el = document.getElementById(id); if (el) el.value = todayStr; });
-            ['add-time', 'manual-view-time'].forEach(id => { const el = document.getElementById(id); if (el) el.value = timeStr; });
+            const manualDateEl = document.getElementById('manual-view-date');
+            if (manualDateEl) manualDateEl.value = todayStr;
+            const manualTimeEl = document.getElementById('manual-view-time');
+            if (manualTimeEl) manualTimeEl.value = timeStr;
 
-            await fetchExchangeRates();
-            await fetchCustomSettings();
-            await fetchTransactions(true);
+            // 流水帳明細資料庫：月份一開始預設為當今當月份
+            const filterMonthEl = document.getElementById('filter-month');
+            if (filterMonthEl) {
+                filterMonthEl.value = monthStr;
+            }
+
+            // ⚡ 第一步：0 毫秒立即讀取本地快取進行首屏極速渲染 (SWR)
+            const hasCached = loadCachedStateAndRender();
+            if (!hasCached) {
+                const countBadge = document.getElementById('ledger-badge-count');
+                if (countBadge) countBadge.textContent = '同步中...';
+            }
+
+            // 🚀 第二步：解除序列串行瀑布 (Waterfall)，背景並行靜默同步最新雲端資料
+            Promise.allSettled([
+                fetchExchangeRates(),
+                fetchCustomSettings(),
+                fetchTransactions(false) // 傳入 false 命中後端 CacheService 快取 (只需 200ms)
+            ]).then(() => {
+                console.log('[SWR] 雲端最新資料背景靜默同步完成');
+            });
         });
 
         function initSidebarDrawer() {
@@ -1259,6 +1420,9 @@
                 document.getElementById('chat-text-input')?.focus();
             } else if (viewName === 'manual-bookkeeping') {
                 updateManualViewConversionPreview();
+                setTimeout(() => {
+                    document.getElementById('manual-view-amount')?.focus();
+                }, 80);
             }
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
@@ -1268,6 +1432,7 @@
                 const rates = await ApiService.getExchangeRates();
                 if (rates && rates.rates) {
                     exchangeRates = rates;
+                    localStorage.setItem('GEMLEDGER_EXCHANGE_RATES_CACHE', JSON.stringify(rates));
                     renderExchangeRatesStrip();
                 }
             } catch (err) {
@@ -1296,11 +1461,26 @@
             strip.innerHTML = items || '<span class="text-slate-400">匯率就緒</span>';
         }
 
+        let persistedSettings = { accounts: [], categories: [] };
+
         async function fetchCustomSettings() {
             try {
                 const settings = await ApiService.getCustomSettings();
                 if (settings) {
                     customSettings = settings;
+                    persistedSettings = { accounts: [...(settings.accounts || [])], categories: [...(settings.categories || [])] };
+                    localStorage.setItem('GEMLEDGER_SETTINGS_CACHE', JSON.stringify(settings));
+
+                    // 若本地尚未記錄過偏好，或雲端有指定預設幣別，同步至當前基準幣別
+                    if (!localStorage.getItem('GEMLEDGER_BASE_CURRENCY') && settings.baseCurrency) {
+                        currentBaseCurrency = settings.baseCurrency;
+                        localStorage.setItem('GEMLEDGER_BASE_CURRENCY', currentBaseCurrency);
+                        const baseSelect = document.getElementById('base-currency-select');
+                        if (baseSelect) baseSelect.value = currentBaseCurrency;
+                        document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
+                        applyFiltersAndRecompute();
+                    }
+
                     populateSettingsOptions();
                     renderSettingsModalLists();
                 }
@@ -1313,6 +1493,7 @@
             try {
                 const data = await ApiService.getSheetData(forceRefresh);
                 rawTransactions = Array.isArray(data) ? data : [];
+                localStorage.setItem('GEMLEDGER_CLIENT_DATA_CACHE', JSON.stringify(rawTransactions));
                 populateYearFilter();
                 applyFiltersAndRecompute();
             } catch (err) {
@@ -1321,7 +1502,7 @@
         }
 
         function populateSettingsOptions() {
-            ['filter-account', 'add-account', 'edit-account', 'manual-view-account'].forEach(id => {
+            ['filter-account', 'edit-account', 'manual-view-account', 'quick-add-account'].forEach(id => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 const isFilter = id === 'filter-account';
@@ -1331,7 +1512,7 @@
                 if ((customSettings.accounts || []).includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
             });
 
-            ['filter-category', 'add-category', 'edit-category', 'manual-view-category'].forEach(id => {
+            ['filter-category', 'edit-category', 'manual-view-category', 'quick-add-category'].forEach(id => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 const isFilter = id === 'filter-category';
@@ -1340,6 +1521,18 @@
                     (customSettings.categories || []).map(c => `<option value="${c}">${c}</option>`).join('');
                 if ((customSettings.categories || []).includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
             });
+
+            const currencies = customSettings.currencies || ['TWD', 'JPY', 'USD', 'KRW', 'EUR', 'CNY', 'GBP', 'HKD', 'SGD', 'THB', 'AUD'];
+            ['filter-currency', 'edit-currency', 'manual-view-currency', 'quick-add-currency'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                const isFilter = id === 'filter-currency';
+                const curVal = el.value || (isFilter ? 'ALL' : currentBaseCurrency);
+                el.innerHTML = (isFilter ? '<option value="ALL">全部幣別</option>' : '') +
+                    currencies.map(c => `<option value="${c}">${c} (${getCurrencySymbol(c).trim()})</option>`).join('');
+                if (currencies.includes(curVal) || (isFilter && curVal === 'ALL')) el.value = curVal;
+            });
+            console.log(`[UI/populateSettingsOptions] SyncDropdowns - Accounts:${(customSettings.accounts || []).length}, Categories:${(customSettings.categories || []).length}, Currencies:${currencies.length}`);
         }
 
         function populateYearFilter() {
@@ -1371,6 +1564,12 @@
                     </span>
                 `).join('');
             }
+
+            const settingsBaseEl = document.getElementById('settings-base-currency');
+            if (settingsBaseEl) {
+                settingsBaseEl.value = customSettings.baseCurrency || currentBaseCurrency || 'TWD';
+            }
+
             lucide.createIcons();
         }
 
@@ -1379,13 +1578,26 @@
             const accountName = customSettings.accounts[idx];
             if (!accountName) return;
 
+            const isPersisted = (persistedSettings.accounts || []).includes(accountName);
+            if (!isPersisted) {
+                customSettings.accounts.splice(idx, 1);
+                renderSettingsModalLists();
+                console.log(`[Settings/removeAccount] RemoveUnsaved - Account:${accountName}`);
+                return showToast(`已移除尚未儲存的帳戶「${accountName}」`, 'info');
+            }
+
             const confirmed = confirm('刪除此項目將會一併清除後端所有包含該帳戶/分類的流水帳歷史記錄，確定刪除？');
             if (!confirmed) return;
 
+            const unsavedAccs = customSettings.accounts.filter(a => a !== accountName && !persistedSettings.accounts.includes(a));
+            const unsavedCats = customSettings.categories.filter(c => !persistedSettings.categories.includes(c));
             showToast(`正在刪除帳戶「${accountName}」及關聯歷史記錄...`, 'info');
             try {
                 const res = await ApiService.deleteAccountCascade(accountName);
                 await fetchCustomSettings();
+                customSettings.accounts.push(...unsavedAccs.filter(a => !customSettings.accounts.includes(a)));
+                customSettings.categories.push(...unsavedCats.filter(c => !customSettings.categories.includes(c)));
+                renderSettingsModalLists();
                 await fetchTransactions();
                 showToast(res?.message || `已成功刪除帳戶「${accountName}」並完成級聯清理！`, 'success');
             } catch (err) {
@@ -1398,13 +1610,26 @@
             const categoryName = customSettings.categories[idx];
             if (!categoryName) return;
 
+            const isPersisted = (persistedSettings.categories || []).includes(categoryName);
+            if (!isPersisted) {
+                customSettings.categories.splice(idx, 1);
+                renderSettingsModalLists();
+                console.log(`[Settings/removeCategory] RemoveUnsaved - Category:${categoryName}`);
+                return showToast(`已移除尚未儲存的分類「${categoryName}」`, 'info');
+            }
+
             const confirmed = confirm('刪除此項目將會一併清除後端所有包含該帳戶/分類的流水帳歷史記錄，確定刪除？');
             if (!confirmed) return;
 
+            const unsavedAccs = customSettings.accounts.filter(a => !persistedSettings.accounts.includes(a));
+            const unsavedCats = customSettings.categories.filter(c => c !== categoryName && !persistedSettings.categories.includes(c));
             showToast(`正在刪除分類「${categoryName}」及關聯歷史記錄...`, 'info');
             try {
                 const res = await ApiService.deleteCategoryCascade(categoryName);
                 await fetchCustomSettings();
+                customSettings.accounts.push(...unsavedAccs.filter(a => !customSettings.accounts.includes(a)));
+                customSettings.categories.push(...unsavedCats.filter(c => !customSettings.categories.includes(c)));
+                renderSettingsModalLists();
                 await fetchTransactions();
                 showToast(res?.message || `已成功刪除分類「${categoryName}」並完成級聯清理！`, 'success');
             } catch (err) {
@@ -1454,11 +1679,26 @@
                 }
 
                 try {
+                    const chosenBaseCurrency = document.getElementById('settings-base-currency')?.value || currentBaseCurrency;
+                    customSettings.baseCurrency = chosenBaseCurrency;
+                    currentBaseCurrency = chosenBaseCurrency;
+                    localStorage.setItem('GEMLEDGER_BASE_CURRENCY', chosenBaseCurrency);
+
+                    const baseSelect = document.getElementById('base-currency-select');
+                    if (baseSelect) baseSelect.value = chosenBaseCurrency;
+                    const manualCurEl = document.getElementById('manual-view-currency');
+                    if (manualCurEl && Array.from(manualCurEl.options).some(o => o.value === chosenBaseCurrency)) {
+                        manualCurEl.value = chosenBaseCurrency;
+                    }
+                    document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
+
                     const res = await ApiService.saveCustomSettings(customSettings);
+                    persistedSettings = { accounts: [...(customSettings.accounts || [])], categories: [...(customSettings.categories || [])] };
+                    localStorage.setItem('GEMLEDGER_SETTINGS_CACHE', JSON.stringify(customSettings));
                     populateSettingsOptions();
                     closeModal(document.getElementById('settings-modal'));
                     applyFiltersAndRecompute();
-                    showToast(res?.message || '已成功儲存自訂帳戶與分類設定！', 'success');
+                    showToast(res?.message || `已成功儲存設定！預設基準幣別已套用為 ${chosenBaseCurrency}`, 'success');
                 } catch (err) {
                     showToast('儲存設定失敗: ' + (err.message || err), 'error');
                 } finally {
@@ -1470,11 +1710,69 @@
         function initFilterListeners() {
             document.getElementById('base-currency-select')?.addEventListener('change', (e) => {
                 currentBaseCurrency = e.target.value;
+                localStorage.setItem('GEMLEDGER_BASE_CURRENCY', currentBaseCurrency);
+                customSettings.baseCurrency = currentBaseCurrency;
+                const settingsBase = document.getElementById('settings-base-currency');
+                if (settingsBase) settingsBase.value = currentBaseCurrency;
+                const manualCurEl = document.getElementById('manual-view-currency');
+                if (manualCurEl && Array.from(manualCurEl.options).some(o => o.value === currentBaseCurrency)) {
+                    manualCurEl.value = currentBaseCurrency;
+                }
                 document.querySelectorAll('.chart-curr-label').forEach(el => { el.textContent = `折算 ${currentBaseCurrency}`; });
+                applyFiltersAndRecompute();
+                showToast(`已切換預設基準幣別為 ${currentBaseCurrency}，下次開啟將自動套用！`, 'success');
+            });
+
+            // 1. 特定日期變更：自動雙向同步「年份」與「月份」選單，避免條件相互打架
+            document.getElementById('filter-date')?.addEventListener('change', (e) => {
+                const val = e.target.value;
+                if (val) {
+                    const [y, m] = val.split('-');
+                    const yearSelect = document.getElementById('filter-year');
+                    const monthSelect = document.getElementById('filter-month');
+                    if (yearSelect) {
+                        const hasYear = Array.from(yearSelect.options).some(opt => opt.value === y);
+                        yearSelect.value = hasYear ? y : 'ALL';
+                    }
+                    if (monthSelect) {
+                        monthSelect.value = m;
+                    }
+                }
+                currentPage = 1;
                 applyFiltersAndRecompute();
             });
 
-            ['filter-year', 'filter-month', 'filter-date', 'filter-account', 'filter-category', 'filter-currency'].forEach(id => {
+            // 2. 年份變更：若特定日期非該年度則自動清空；切換年份時自動將月份設為 ALL，避免使用者查看 2025 年時因鎖死當前月份而誤判為 0 筆
+            document.getElementById('filter-year')?.addEventListener('change', (e) => {
+                const newYear = e.target.value;
+                const dateInput = document.getElementById('filter-date');
+                const monthSelect = document.getElementById('filter-month');
+                if (dateInput && dateInput.value && !dateInput.value.startsWith(newYear)) {
+                    dateInput.value = '';
+                }
+                if (monthSelect && dateInput && !dateInput.value) {
+                    monthSelect.value = 'ALL';
+                }
+                currentPage = 1;
+                applyFiltersAndRecompute();
+            });
+
+            // 3. 月份變更：若特定日期與新月份不符則自動清空特定日期
+            document.getElementById('filter-month')?.addEventListener('change', (e) => {
+                const newMonth = e.target.value;
+                const dateInput = document.getElementById('filter-date');
+                if (dateInput && dateInput.value) {
+                    const parts = dateInput.value.split('-');
+                    if (newMonth !== 'ALL' && parts[1] !== newMonth) {
+                        dateInput.value = '';
+                    }
+                }
+                currentPage = 1;
+                applyFiltersAndRecompute();
+            });
+
+            // 4. 帳戶、分類、幣別變更
+            ['filter-account', 'filter-category', 'filter-currency'].forEach(id => {
                 document.getElementById(id)?.addEventListener('change', () => { currentPage = 1; applyFiltersAndRecompute(); });
             });
 
@@ -1524,9 +1822,15 @@
 
             filteredTransactions = rawTransactions.filter(t => {
                 const parts = (t.date || '').split('-');
-                if (yearFilter !== 'ALL' && parts[0] !== yearFilter) return false;
-                if (monthFilter !== 'ALL' && parts[1] !== monthFilter) return false;
-                if (dateFilter && t.date !== dateFilter) return false;
+                
+                // 優先級解耦：若有指定「特定日期」，以特定日期為準（不再與年/月選單發生衝突）
+                if (dateFilter) {
+                    if (t.date !== dateFilter) return false;
+                } else {
+                    if (yearFilter !== 'ALL' && parts[0] !== yearFilter) return false;
+                    if (monthFilter !== 'ALL' && parts[1] !== monthFilter) return false;
+                }
+
                 if (accountFilter !== 'ALL' && t.account !== accountFilter) return false;
                 if (categoryFilter !== 'ALL' && t.category !== categoryFilter) return false;
                 if (currencyFilter !== 'ALL' && (t.currency || 'TWD').toUpperCase() !== currencyFilter) return false;
@@ -1575,7 +1879,15 @@
             document.getElementById('kpi-food-amount').textContent = `餐飲: ${formatMoney(foodExpenseConverted, currentBaseCurrency)}`;
         }
 
+        let chartRafId = null;
         function updateCharts() {
+            if (chartRafId) cancelAnimationFrame(chartRafId);
+            chartRafId = requestAnimationFrame(() => {
+                _renderAllCharts();
+            });
+        }
+
+        function _renderAllCharts() {
             const catCtx = document.getElementById('categoryChart')?.getContext('2d');
             if (catCtx) {
                 const catMap = {};
@@ -1588,15 +1900,21 @@
                 const labels = Object.keys(catMap);
                 const data = labels.map(k => catMap[k]);
                 const colors = ['#0f766e', '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#f59e0b', '#84cc16'];
-                if (categoryChartInstance) categoryChartInstance.destroy();
-                categoryChartInstance = new Chart(catCtx, {
-                    type: 'doughnut',
-                    data: {
-                        labels: labels.length ? labels : ['無支出'],
-                        datasets: [{ data: data.length ? data : [1], backgroundColor: data.length ? colors.slice(0, labels.length) : ['#e2e8f0'] }]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } } }
-                });
+                const catLabels = labels.length ? labels : ['無支出'];
+                const catData = data.length ? data : [1];
+                const catBg = data.length ? labels.map((_, i) => colors[i % colors.length]) : ['#e2e8f0'];
+                if (categoryChartInstance) {
+                    categoryChartInstance.data.labels = catLabels;
+                    categoryChartInstance.data.datasets[0].data = catData;
+                    categoryChartInstance.data.datasets[0].backgroundColor = catBg;
+                    categoryChartInstance.update();
+                } else {
+                    categoryChartInstance = new Chart(catCtx, {
+                        type: 'doughnut',
+                        data: { labels: catLabels, datasets: [{ data: catData, backgroundColor: catBg }] },
+                        options: { responsive: true, maintainAspectRatio: false, cutout: '65%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } } }
+                    });
+                }
             }
 
             const acctCtx = document.getElementById('accountChart')?.getContext('2d');
@@ -1609,15 +1927,19 @@
                 });
                 const labels = Object.keys(acctMap).filter(k => Math.abs(acctMap[k]) > 0.01 || (customSettings.accounts || []).slice(0, 4).includes(k));
                 const data = labels.map(k => acctMap[k]);
-                if (accountChartInstance) accountChartInstance.destroy();
-                accountChartInstance = new Chart(acctCtx, {
-                    type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{ data: data, backgroundColor: data.map(v => v >= 0 ? '#10b981' : '#f43f5e'), borderRadius: 6 }]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
-                });
+                const acctBg = data.map(v => v >= 0 ? '#10b981' : '#f43f5e');
+                if (accountChartInstance) {
+                    accountChartInstance.data.labels = labels;
+                    accountChartInstance.data.datasets[0].data = data;
+                    accountChartInstance.data.datasets[0].backgroundColor = acctBg;
+                    accountChartInstance.update();
+                } else {
+                    accountChartInstance = new Chart(acctCtx, {
+                        type: 'bar',
+                        data: { labels: labels, datasets: [{ data: data, backgroundColor: acctBg, borderRadius: 6 }] },
+                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
+                    });
+                }
             }
 
             const trendCtx = document.getElementById('trendChart')?.getContext('2d');
@@ -1631,19 +1953,29 @@
                     else if (t.amount < 0 && t.category !== '內部轉帳') dateMap[d].expense += Math.abs(conv);
                 });
                 const sortedDates = Object.keys(dateMap).sort();
-                if (trendChartInstance) trendChartInstance.destroy();
-                trendChartInstance = new Chart(trendCtx, {
-                    type: 'bar',
-                    data: {
-                        labels: sortedDates.map(d => d.slice(5)),
-                        datasets: [
-                            { label: '收入', data: sortedDates.map(d => dateMap[d].income), backgroundColor: '#10b981', borderRadius: 4 },
-                            { label: '支出', data: sortedDates.map(d => dateMap[d].expense), backgroundColor: '#f43f5e', borderRadius: 4 }
-                        ]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
-                });
+                const trendLabels = sortedDates.map(d => d.slice(5));
+                const incData = sortedDates.map(d => dateMap[d].income);
+                const expData = sortedDates.map(d => dateMap[d].expense);
+                if (trendChartInstance) {
+                    trendChartInstance.data.labels = trendLabels;
+                    trendChartInstance.data.datasets[0].data = incData;
+                    trendChartInstance.data.datasets[1].data = expData;
+                    trendChartInstance.update();
+                } else {
+                    trendChartInstance = new Chart(trendCtx, {
+                        type: 'bar',
+                        data: {
+                            labels: trendLabels,
+                            datasets: [
+                                { label: '收入', data: incData, backgroundColor: '#10b981', borderRadius: 4 },
+                                { label: '支出', data: expData, backgroundColor: '#f43f5e', borderRadius: 4 }
+                            ]
+                        },
+                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } } }, scales: { y: { ticks: { font: { size: 10 } } }, x: { ticks: { font: { size: 10 } } } } }
+                    });
+                }
             }
+            console.log(`[Charts/_renderAllCharts] UpdateCharts - Filtered:${filteredTransactions.length}, Base:${currentBaseCurrency}`);
         }
 
         function renderTableAndPagination() {
@@ -1680,8 +2012,8 @@
                             <td class="col-note hidden md:table-cell py-2.5 px-4 text-slate-500 max-w-[150px] truncate">${escapeHtml(t.note || '-')}</td>
                             <td class="col-actions py-2.5 px-2 sm:px-4 whitespace-nowrap text-center">
                                 <div class="inline-flex items-center gap-1">
-                                    <button onclick="openEditModal(${t.id || t.rowNumber})" class="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors" title="編輯"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
-                                    <button onclick="deleteTransactionItem(${t.id || t.rowNumber})" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors" title="刪除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                                    <button onclick="openEditModal(${t.rowNumber || t.id})" class="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors" title="編輯"><i data-lucide="edit-2" class="w-3.5 h-3.5"></i></button>
+                                    <button onclick="deleteTransactionItem(${t.rowNumber || t.id})" class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors" title="刪除"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
                                 </div>
                             </td>
                         </tr>
@@ -1705,12 +2037,6 @@
         }
 
         function initModalHandlers() {
-            document.getElementById('btn-open-manual-modal')?.addEventListener('click', () => {
-                const now = new Date();
-                document.getElementById('add-date').value = now.toISOString().split('T')[0];
-                document.getElementById('add-time').value = now.toTimeString().slice(0, 5);
-                openModal(document.getElementById('manual-modal'));
-            });
             document.getElementById('btn-open-settings')?.addEventListener('click', () => {
                 renderSettingsModalLists();
                 openModal(document.getElementById('settings-modal'));
@@ -1723,30 +2049,113 @@
                 });
             });
 
-            document.getElementById('form-manual-add')?.addEventListener('submit', async (e) => {
+            // 點擊彈窗半透明背景空白處直接關閉
+            ['quick-add-modal', 'edit-modal', 'settings-modal'].forEach(id => {
+                const modal = document.getElementById(id);
+                if (modal) {
+                    modal.addEventListener('click', (e) => {
+                        if (e.target === modal) closeModal(modal);
+                    });
+                }
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    ['quick-add-modal', 'edit-modal', 'settings-modal'].forEach(id => {
+                        const m = document.getElementById(id);
+                        if (m && !m.classList.contains('hidden')) closeModal(m);
+                    });
+                    document.getElementById('btn-close-sidebar')?.click();
+                }
+            });
+
+            // ⚡ 右上角「記一筆」按鈕：在當前儀表板彈出半透明浮動視窗
+            document.getElementById('btn-header-quick-add')?.addEventListener('click', () => {
+                openQuickAddModal();
+            });
+
+            // 即時折算預覽計算
+            function updateQuickAddConversionPreview() {
+                const amtVal = parseFloat(document.getElementById('quick-add-amount')?.value) || 0;
+                const cur = document.getElementById('quick-add-currency')?.value || currentBaseCurrency;
+                const converted = convertCurrency(amtVal, cur, currentBaseCurrency);
+                const previewEl = document.getElementById('quick-add-preview-text');
+                if (previewEl) {
+                    previewEl.textContent = `${formatMoney(converted, currentBaseCurrency)} (${currentBaseCurrency})`;
+                }
+            }
+
+            document.getElementById('quick-add-amount')?.addEventListener('input', updateQuickAddConversionPreview);
+            document.getElementById('quick-add-currency')?.addEventListener('change', updateQuickAddConversionPreview);
+
+            // 正負號快捷切換
+            document.getElementById('btn-quick-add-toggle-sign')?.addEventListener('click', () => {
+                const input = document.getElementById('quick-add-amount');
+                if (!input) return;
+                const cur = parseFloat(input.value);
+                if (!isNaN(cur) && cur !== 0) {
+                    input.value = (cur * -1).toString();
+                    updateQuickAddConversionPreview();
+                } else if (input.value === '') {
+                    input.value = '-';
+                }
+            });
+
+            // 快速記帳表單提交
+            document.getElementById('form-quick-add')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
+                const submitBtn = document.getElementById('btn-submit-quick-add');
+                const originalHtml = submitBtn ? submitBtn.innerHTML : '確認寫入';
+                const continuous = document.getElementById('quick-add-continuous-mode')?.checked;
+
                 const newItem = {
-                    date: document.getElementById('add-date')?.value || '',
-                    time: document.getElementById('add-time')?.value || '',
-                    account: document.getElementById('add-account')?.value || '現金',
-                    name: document.getElementById('add-name')?.value || '',
-                    category: document.getElementById('add-category')?.value || '食',
-                    currency: document.getElementById('add-currency')?.value || 'TWD',
-                    amount: parseFloat(document.getElementById('add-amount')?.value) || 0,
-                    note: document.getElementById('add-note')?.value || ''
+                    date: document.getElementById('quick-add-date').value,
+                    time: document.getElementById('quick-add-time').value,
+                    account: document.getElementById('quick-add-account').value,
+                    name: document.getElementById('quick-add-name').value.trim(),
+                    category: document.getElementById('quick-add-category').value,
+                    currency: document.getElementById('quick-add-currency').value,
+                    amount: parseFloat(document.getElementById('quick-add-amount').value) || 0,
+                    note: document.getElementById('quick-add-note').value.trim()
                 };
+
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>寫入中...</span>`;
+                    lucide.createIcons();
+                }
+
                 try {
                     const res = await ApiService.addTransaction(newItem);
-                    showToast(res?.message || '已成功新增記帳紀錄！', 'success');
-                    closeModal(document.getElementById('manual-modal'));
+                    showToast(res?.message || `已成功寫入「${newItem.name}」！`, 'success');
                     await fetchTransactions();
+
+                    if (continuous) {
+                        document.getElementById('quick-add-name').value = '';
+                        document.getElementById('quick-add-amount').value = '';
+                        document.getElementById('quick-add-note').value = '';
+                        updateQuickAddConversionPreview();
+                        document.getElementById('quick-add-amount')?.focus();
+                    } else {
+                        closeModal(document.getElementById('quick-add-modal'));
+                        document.getElementById('form-quick-add').reset();
+                    }
                 } catch (err) {
-                    showToast('新增失敗: ' + (err.message || err), 'error');
+                    showToast('寫入失敗: ' + (err.message || err), 'error');
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalHtml;
+                        lucide.createIcons();
+                    }
                 }
             });
 
             document.getElementById('form-edit-transaction')?.addEventListener('submit', async (e) => {
                 e.preventDefault();
+                const editForm = e.target;
+                const submitBtn = editForm.querySelector('button[type="submit"]');
+                const originalHtml = submitBtn ? submitBtn.innerHTML : '更新紀錄';
                 const id = document.getElementById('edit-id')?.value;
                 const updatedItem = {
                     date: document.getElementById('edit-date')?.value || '',
@@ -1758,6 +2167,11 @@
                     amount: parseFloat(document.getElementById('edit-amount')?.value) || 0,
                     note: document.getElementById('edit-note')?.value || ''
                 };
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = '更新中...';
+                }
+                console.log(`[Ledger/submitEdit] UpdateTransaction - Row:${id}, Acc:${updatedItem.account}, Cat:${updatedItem.category}`);
                 try {
                     const res = await ApiService.updateTransaction(id, updatedItem);
                     showToast(res?.message || '已成功更新紀錄！', 'success');
@@ -1765,37 +2179,97 @@
                     await fetchTransactions();
                 } catch (err) {
                     showToast('更新失敗: ' + (err.message || err), 'error');
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalHtml;
+                    }
                 }
             });
         }
 
+        window.openQuickAddModal = function() {
+            const modal = document.getElementById('quick-add-modal');
+            if (!modal) return;
+            const now = new Date();
+            const yearStr = now.getFullYear();
+            const monthStr = String(now.getMonth() + 1).padStart(2, '0');
+            const dayStr = String(now.getDate()).padStart(2, '0');
+            const todayStr = `${yearStr}-${monthStr}-${dayStr}`;
+            const timeStr = now.toTimeString().slice(0, 5);
+
+            const dateEl = document.getElementById('quick-add-date');
+            if (dateEl) dateEl.value = todayStr;
+            const timeEl = document.getElementById('quick-add-time');
+            if (timeEl) timeEl.value = timeStr;
+
+            const curEl = document.getElementById('quick-add-currency');
+            if (curEl && Array.from(curEl.options).some(o => o.value === currentBaseCurrency)) {
+                curEl.value = currentBaseCurrency;
+            }
+
+            openModal(modal);
+            const amtVal = parseFloat(document.getElementById('quick-add-amount')?.value) || 0;
+            const cur = document.getElementById('quick-add-currency')?.value || currentBaseCurrency;
+            const converted = convertCurrency(amtVal, cur, currentBaseCurrency);
+            const previewEl = document.getElementById('quick-add-preview-text');
+            if (previewEl) {
+                previewEl.textContent = `${formatMoney(converted, currentBaseCurrency)} (${currentBaseCurrency})`;
+            }
+
+            setTimeout(() => {
+                document.getElementById('quick-add-amount')?.focus();
+            }, 80);
+        };
+
         function openModal(modal) { if (modal) { modal.classList.remove('hidden'); modal.classList.add('flex'); } }
         function closeModal(modal) { if (modal) { modal.classList.remove('flex'); modal.classList.add('hidden'); } }
 
-        window.openEditModal = function(id) {
-            const item = rawTransactions.find(t => t.id === id || t.rowNumber === id);
+        window.openEditModal = function(rowNumberOrId) {
+            const item = rawTransactions.find(t => String(t.rowNumber) === String(rowNumberOrId) || String(t.id) === String(rowNumberOrId));
             if (!item) return;
-            document.getElementById('edit-id').value = item.id || item.rowNumber;
-            document.getElementById('edit-row-id').textContent = item.rowNumber || item.id;
+            populateSettingsOptions();
+            const ensureOption = (selectId, val) => {
+                const el = document.getElementById(selectId);
+                if (!el || !val) return;
+                if (!Array.from(el.options).some(o => o.value === val)) {
+                    const opt = document.createElement('option');
+                    opt.value = val;
+                    opt.textContent = `${val} (歷史項目)`;
+                    el.appendChild(opt);
+                    console.log(`[Ledger/openEditModal] InjectLegacyOption - Select:${selectId}, Value:${val}`);
+                }
+                el.value = val;
+            };
+            const targetRow = item.rowNumber || item.id;
+            document.getElementById('edit-id').value = targetRow;
+            document.getElementById('edit-row-id').textContent = targetRow;
             document.getElementById('edit-date').value = item.date || '';
             document.getElementById('edit-time').value = item.time || '';
             document.getElementById('edit-name').value = item.name || '';
-            document.getElementById('edit-account').value = item.account || '現金';
-            document.getElementById('edit-category').value = item.category || '食';
-            document.getElementById('edit-currency').value = (item.currency || 'TWD').toUpperCase();
+            ensureOption('edit-account', item.account || '現金');
+            ensureOption('edit-category', item.category || '食');
+            ensureOption('edit-currency', (item.currency || 'TWD').toUpperCase());
             document.getElementById('edit-amount').value = item.amount;
             document.getElementById('edit-note').value = item.note || '';
+            console.log(`[Ledger/openEditModal] Open - Row:${targetRow}, Name:${item.name}`);
             openModal(document.getElementById('edit-modal'));
         };
 
-        window.deleteTransactionItem = async function(id) {
+        let _isDeletingRow = false;
+        window.deleteTransactionItem = async function(rowNumberOrId) {
+            if (_isDeletingRow) return showToast('正在處理上一筆刪除請求，請稍候...', 'info');
             if (!confirm('確定要從試算表刪除此筆記帳明細嗎？')) return;
+            _isDeletingRow = true;
+            console.log(`[Ledger/deleteTransactionItem] Request - Row:${rowNumberOrId}`);
             try {
-                const res = await ApiService.deleteTransaction(id);
+                const res = await ApiService.deleteTransaction(rowNumberOrId);
                 showToast(res?.message || '已成功刪除記帳明細', 'success');
                 await fetchTransactions();
             } catch (err) {
                 showToast('刪除失敗: ' + (err.message || err), 'error');
+            } finally {
+                _isDeletingRow = false;
             }
         };
 
@@ -1806,15 +2280,45 @@
         let chatImageMime = 'image/jpeg';
         let chatImageName = '';
 
-        const chatMessages = [
-            {
-                id: 'welcome-msg',
-                role: 'ai',
-                time: new Date().toTimeString().slice(0, 5),
-                text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字、錄製語音或上傳發票收據照片，確認後即可一鍵寫入試算表！',
-                transactions: []
+        function saveChatMessagesToStorage() {
+            try {
+                const safeMessages = chatMessages.slice(-25).map(m => {
+                    if (m.image && m.image.length > 60000) {
+                        return { ...m, image: null, hasOmittedImage: true };
+                    }
+                    return m;
+                });
+                localStorage.setItem('GEMLEDGER_SAVED_CHAT_MESSAGES', JSON.stringify(safeMessages));
+            } catch (e) {
+                console.warn('儲存對話紀錄失敗:', e);
             }
-        ];
+        }
+
+        function loadChatMessagesFromStorage() {
+            try {
+                const saved = localStorage.getItem('GEMLEDGER_SAVED_CHAT_MESSAGES');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        const cleaned = parsed.filter(m => !m.isLoading);
+                        return cleaned.length > 0 ? cleaned : null;
+                    }
+                }
+            } catch (e) {
+                console.warn('載入對話紀錄失敗:', e);
+            }
+            return null;
+        }
+
+        const defaultWelcomeMsg = {
+            id: 'welcome-msg',
+            role: 'ai',
+            time: new Date().toTimeString().slice(0, 5),
+            text: '您好！我是 Gemini 3.5 AI 智慧記帳助理。\n請直接輸入消費文字、錄製語音或上傳發票收據照片，確認後即可一鍵寫入試算表！',
+            transactions: []
+        };
+
+        const chatMessages = loadChatMessagesFromStorage() || [defaultWelcomeMsg];
 
         function compressImageFile(file, maxDimension = 1280, quality = 0.75) {
             return new Promise((resolve, reject) => {
@@ -1874,9 +2378,38 @@
                         text: '對話紀錄已清空。',
                         transactions: []
                     });
+                    localStorage.removeItem('GEMLEDGER_SAVED_CHAT_MESSAGES');
                     renderChatStream();
                 });
             }
+
+            // 手機切換背景 (Page Visibility) 喚醒感應
+            let lastHiddenTimestamp = 0;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'hidden') {
+                    lastHiddenTimestamp = Date.now();
+                } else if (document.visibilityState === 'visible') {
+                    const elapsed = Date.now() - lastHiddenTimestamp;
+                    // 若切到其他 App 超過 2.5 秒，手機 OS 會凍結網路。檢查是否有卡在 isLoading 的訊息，並自動轉為安全重試狀態
+                    const loadingIdx = chatMessages.findIndex(m => m.isLoading);
+                    if (loadingIdx !== -1 && elapsed > 2500) {
+                        const loadingMsg = chatMessages[loadingIdx];
+                        chatMessages.splice(loadingIdx, 1);
+                        chatMessages.push({
+                            id: 'ai-resume-' + Date.now(),
+                            role: 'ai',
+                            time: new Date().toTimeString().slice(0, 5),
+                            text: '📱 偵測到手機剛才切換至其他應用程式（如 Instagram/LINE），瀏覽器連線曾被系統暫停。您的輸入內容已妥善保留，請點擊下方按鈕立即接續辨識：',
+                            isRetryable: true,
+                            retryPayload: loadingMsg.originalPayload || null,
+                            transactions: []
+                        });
+                        saveChatMessagesToStorage();
+                        renderChatStream();
+                        showToast('已為您保留記帳內容，請點擊重試', 'info');
+                    }
+                }
+            });
 
             document.querySelectorAll('.chat-prompt-chip').forEach(chip => {
                 chip.addEventListener('click', () => {
@@ -1939,10 +2472,10 @@
                 audioInput.value = '';
             });
 
-            async function handleSendChatMessage(audioPayload = null) {
-                const text = (chatTextInput?.value || '').trim();
-                const image = chatImageBase64;
-                const mime = chatImageMime;
+            async function handleSendChatMessage(audioPayload = null, directText = null, directMedia = null, directMime = null) {
+                const text = directText !== null ? directText : (chatTextInput?.value || '').trim();
+                const image = directMedia !== null ? directMedia : chatImageBase64;
+                const mime = directMime !== null ? directMime : chatImageMime;
 
                 let mediaBase64 = image;
                 let mediaMime = mime;
@@ -1969,7 +2502,7 @@
                     isAudio: isAudio
                 });
 
-                if (chatTextInput) chatTextInput.value = '';
+                if (chatTextInput && directText === null) chatTextInput.value = '';
                 chatImageBase64 = null;
                 if (fileInput) fileInput.value = '';
                 imagePreviewBar?.classList.add('hidden');
@@ -1981,10 +2514,12 @@
                     role: 'ai',
                     time: new Date().toTimeString().slice(0, 5),
                     isLoading: true,
-                    text: isAudio ? 'Gemini 3.5 Transcribe 正在聆聽語音辨識記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
+                    text: isAudio ? 'Gemini 3.5 正在聆聽語音辨識記帳中...' : 'Gemini 3.5 正在辨識記帳中...',
+                    originalPayload: { text, mediaBase64, mediaMime, isAudio },
                     transactions: []
                 });
 
+                saveChatMessagesToStorage();
                 renderChatStream();
 
                 try {
@@ -2006,20 +2541,44 @@
                         text: res.reply || '已成功解析！請核對小卡並確認寫入：',
                         transactions: txsWithUid
                     });
+                    saveChatMessagesToStorage();
                     renderChatStream();
                 } catch (err) {
                     const idx = chatMessages.findIndex(m => m.id === loadingMsgId);
                     if (idx !== -1) chatMessages.splice(idx, 1);
+                    const errMsg = String(err?.message || err || '');
+                    const isBgOrNetError = document.visibilityState === 'hidden' || /network|scripterror|timeout|aborted|failed to fetch/i.test(errMsg);
+
+                    const tipText = isBgOrNetError
+                        ? '📱 偵測到切換應用程式或網路短暫中斷。您的記帳內容已安全暫存，請點擊下方按鈕立即重新解析：'
+                        : `辨識時發生錯誤：${errMsg}`;
+
                     chatMessages.push({
                         id: 'ai-err-' + Date.now(),
                         role: 'ai',
                         time: new Date().toTimeString().slice(0, 5),
-                        text: '辨識時發生錯誤：' + (err.message || err),
+                        text: tipText,
+                        isRetryable: true,
+                        retryPayload: { text, mediaBase64, mediaMime, isAudio },
                         transactions: []
                     });
+                    saveChatMessagesToStorage();
                     renderChatStream();
                 }
             }
+
+            window.retryChatMessage = function(msgId) {
+                const idx = chatMessages.findIndex(m => m.id === msgId);
+                if (idx === -1) return;
+                const item = chatMessages[idx];
+                const p = item.retryPayload;
+                chatMessages.splice(idx, 1);
+                saveChatMessagesToStorage();
+                renderChatStream();
+                if (p) {
+                    handleSendChatMessage(null, p.text, p.mediaBase64, p.mediaMime);
+                }
+            };
         }
 
         function renderChatStream() {
@@ -2047,6 +2606,25 @@
                         <div class="bg-white border border-teal-200 rounded-2xl rounded-tl-xs p-2.5 shadow-2xs text-xs text-teal-900 flex items-center gap-1.5">
                             <span class="w-2 h-2 rounded-full bg-teal-500 animate-ping"></span>
                             <span>${escapeHtml(msg.text)}</span>
+                        </div>
+                    </div>
+                    `;
+                }
+
+                if (msg.isRetryable) {
+                    return `
+                    <div class="flex items-start gap-2 max-w-[95%]">
+                        <div class="w-7 h-7 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5">
+                            <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
+                        </div>
+                        <div class="space-y-2 w-full">
+                            <div class="bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl rounded-tl-xs p-3 shadow-2xs text-xs space-y-2">
+                                <div class="whitespace-pre-line leading-relaxed">${escapeHtml(msg.text)}</div>
+                                <button type="button" onclick="retryChatMessage('${msg.id}')" class="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5">
+                                    <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+                                    <span>🔄 立即重新辨識（免重複輸入）</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     `;
@@ -2083,12 +2661,34 @@
                         `;
                     } else {
                         actionContent = `
-                            <button type="button" onclick="confirmWriteTransaction('${tx.uid}')" id="btn-confirm-${tx.uid}" class="w-full py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-[11px] rounded-lg transition-all flex items-center justify-center gap-1">
-                                <i data-lucide="check" class="w-3.5 h-3.5"></i>
-                                <span>確認寫入</span>
-                            </button>
+                            <div class="flex items-center gap-1.5">
+                                <button type="button" onclick="toggleDraftEdit('${tx.uid}')" class="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold text-[11px] rounded-lg transition-all flex items-center gap-1 shrink-0">
+                                    <i data-lucide="${tx.isEditing ? 'check' : 'pencil'}" class="w-3 h-3"></i>
+                                    <span>${tx.isEditing ? '完成' : '微調'}</span>
+                                </button>
+                                <button type="button" onclick="confirmWriteTransaction('${tx.uid}')" id="btn-confirm-${tx.uid}" class="flex-1 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-[11px] rounded-lg transition-all flex items-center justify-center gap-1">
+                                    <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                                    <span>確認寫入</span>
+                                </button>
+                            </div>
                         `;
                     }
+
+                    const editPanelHtml = (!tx.confirmed && tx.isEditing) ? `
+                        <div class="grid grid-cols-2 gap-1.5 pt-2 border-t border-slate-200/80 text-[11px]">
+                            <input type="text" value="${escapeHtml(tx.name || '')}" onchange="updateDraftTx('${tx.uid}','name',this.value)" placeholder="項目名稱" class="col-span-2 bg-white border border-slate-200 rounded-lg px-2 py-1 text-slate-800">
+                            <input type="number" step="any" value="${tx.amount}" onchange="updateDraftTx('${tx.uid}','amount',this.value)" placeholder="金額(負支出/正收入)" class="bg-white border border-slate-200 rounded-lg px-2 py-1 font-mono font-bold text-slate-800">
+                            <select onchange="updateDraftTx('${tx.uid}','currency',this.value)" class="bg-white border border-slate-200 rounded-lg px-1.5 py-1 font-mono text-slate-800">
+                                ${(customSettings.currencies || ['TWD','JPY','USD','KRW','EUR','CNY','GBP','HKD','SGD','THB','AUD']).map(c => `<option value="${c}" ${(tx.currency||'TWD').toUpperCase()===c?'selected':''}>${c}</option>`).join('')}
+                            </select>
+                            <select onchange="updateDraftTx('${tx.uid}','account',this.value)" class="bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-slate-800">
+                                ${(customSettings.accounts || ['現金']).map(a => `<option value="${escapeHtml(a)}" ${tx.account===a?'selected':''}>${escapeHtml(a)}</option>`).join('')}
+                            </select>
+                            <select onchange="updateDraftTx('${tx.uid}','category',this.value)" class="bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-slate-800">
+                                ${(customSettings.categories || ['食']).map(c => `<option value="${escapeHtml(c)}" ${tx.category===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+                            </select>
+                        </div>
+                    ` : '';
 
                     return `
                     <div class="border border-slate-200 bg-slate-50 rounded-xl p-3 space-y-2 text-xs" id="card-${tx.uid}">
@@ -2102,6 +2702,7 @@
                                 <div class="text-[10px] text-slate-400 font-mono">≈ ${formatMoney(convertedAmount, currentBaseCurrency)}</div>
                             </div>
                         </div>
+                        ${editPanelHtml}
                         <div class="pt-1 border-t border-slate-200" id="card-action-${tx.uid}">
                             ${actionContent}
                         </div>
@@ -2141,6 +2742,28 @@
             setTimeout(() => { stream.scrollTop = stream.scrollHeight; }, 50);
         }
 
+        window.toggleDraftEdit = function(uid) {
+            for (const msg of chatMessages) {
+                const tx = (msg.transactions || []).find(t => t.uid === uid);
+                if (tx) { tx.isEditing = !tx.isEditing; break; }
+            }
+            saveChatMessagesToStorage();
+            renderChatStream();
+        };
+
+        window.updateDraftTx = function(uid, field, val) {
+            for (const msg of chatMessages) {
+                const tx = (msg.transactions || []).find(t => t.uid === uid);
+                if (tx) {
+                    tx[field] = field === 'amount' ? (parseFloat(val) || 0) : String(val).trim();
+                    console.log(`[AIChat/updateDraftTx] FieldUpdated - UID:${uid}, ${field}:${tx[field]}`);
+                    break;
+                }
+            }
+            saveChatMessagesToStorage();
+            renderChatStream();
+        };
+
         window.confirmWriteAllTransactions = async function(msgId) {
             const msg = chatMessages.find(m => m.id === msgId);
             if (!msg || !msg.transactions) return;
@@ -2171,6 +2794,7 @@
                     t.confirmed = true;
                     t.error = null;
                 });
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`已成功批次寫入 ${itemsToSave.length} 筆記帳紀錄！`, 'success');
                 await fetchTransactions();
@@ -2179,6 +2803,7 @@
                     t.isSubmitting = false;
                     t.error = (err && err.message) ? err.message : String(err);
                 });
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`批次寫入失敗: ${err.message || err}`, 'error');
             }
@@ -2222,12 +2847,14 @@
                 targetTx.isSubmitting = false;
                 targetTx.confirmed = true;
                 targetTx.error = null;
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`已成功寫入「${itemToSave.name}」！`, 'success');
                 await fetchTransactions();
             } catch (err) {
                 targetTx.isSubmitting = false;
                 targetTx.error = (err && err.message) ? err.message : String(err);
+                saveChatMessagesToStorage();
                 renderChatStream();
                 showToast(`寫入失敗: ${targetTx.error}`, 'error');
             }
@@ -2238,11 +2865,38 @@
             const amountInput = document.getElementById('manual-view-amount');
             const currencySelect = document.getElementById('manual-view-currency');
 
+            function resetManualFormDefaults() {
+                const now = new Date();
+                const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                const timeStr = now.toTimeString().slice(0, 5);
+                const dateEl = document.getElementById('manual-view-date');
+                if (dateEl) dateEl.value = todayStr;
+                const timeEl = document.getElementById('manual-view-time');
+                if (timeEl) timeEl.value = timeStr;
+                const curEl = document.getElementById('manual-view-currency');
+                if (curEl && Array.from(curEl.options).some(o => o.value === currentBaseCurrency)) {
+                    curEl.value = currentBaseCurrency;
+                }
+                updateManualViewConversionPreview();
+            }
+
+            if (currencySelect && Array.from(currencySelect.options).some(o => o.value === currentBaseCurrency)) {
+                currencySelect.value = currentBaseCurrency;
+            }
+
             amountInput?.addEventListener('input', updateManualViewConversionPreview);
             currencySelect?.addEventListener('change', updateManualViewConversionPreview);
 
+            document.getElementById('btn-manual-view-reset')?.addEventListener('click', () => {
+                form?.reset();
+                resetManualFormDefaults();
+                console.log('[ManualForm/reset] ResetForm - Cleared fields and restored defaults');
+            });
+
             form?.addEventListener('submit', async (e) => {
                 e.preventDefault();
+                const submitBtn = form.querySelector('button[type="submit"]');
+                const originalHtml = submitBtn ? submitBtn.innerHTML : '';
                 const continuous = document.getElementById('manual-continuous-mode')?.checked;
                 const newItem = {
                     date: document.getElementById('manual-view-date').value,
@@ -2255,6 +2909,13 @@
                     note: document.getElementById('manual-view-note').value.trim()
                 };
 
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>寫入中...</span>`;
+                    lucide.createIcons();
+                }
+                console.log(`[ManualForm/submit] AddTransaction - Input: ${newItem.name} (${newItem.amount} ${newItem.currency})`);
+
                 try {
                     const res = await ApiService.addTransaction(newItem);
                     showToast(res?.message || '成功寫入記帳紀錄！', 'success');
@@ -2262,13 +2923,21 @@
                         document.getElementById('manual-view-name').value = '';
                         document.getElementById('manual-view-amount').value = '';
                         document.getElementById('manual-view-note').value = '';
+                        updateManualViewConversionPreview();
                     } else {
                         form.reset();
+                        resetManualFormDefaults();
                         switchView('dashboard');
                     }
                     await fetchTransactions();
                 } catch (err) {
                     showToast('寫入失敗: ' + (err.message || err), 'error');
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalHtml;
+                        lucide.createIcons();
+                    }
                 }
             });
         }
