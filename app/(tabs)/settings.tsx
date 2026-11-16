@@ -35,6 +35,7 @@ import {
   WifiOff,
   X,
 } from 'lucide-react-native';
+import { ACCOUNT_ICON_OPTIONS, LedgerIcon } from '../../src/components/LedgerIcon';
 import { ApiService } from '../../src/services/apiService';
 import { useLedgerStore } from '../../src/store/useLedgerStore';
 import { getAccountMeta, getCategoryMeta, ThemeMode } from '../../src/theme/colors';
@@ -126,6 +127,7 @@ export default function SettingsScreen() {
   const [newCategoryInput, setNewCategoryInput] = useState('');
   const [proxyUrlInput, setProxyUrlInput] = useState(settings.aiProxyUrl || '');
   const [confirmState, setConfirmState] = useState<ConfirmActionState>(null);
+  const [editingIconAccount, setEditingIconAccount] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackBanner | null>(null);
 
@@ -260,6 +262,11 @@ export default function SettingsScreen() {
           `[SettingsScreen/handleCascadeDelete] Account:${confirmState.target}, Linked:${confirmState.linkedCount}`,
         );
         const res = await removeAccountCascade(confirmState.target);
+        if (settings.accountIcons?.[confirmState.target]) {
+          const nextAccountIcons = { ...settings.accountIcons };
+          delete nextAccountIcons[confirmState.target];
+          await updateSettings({ accountIcons: nextAccountIcons });
+        }
         showFeedback(
           'success',
           `已刪除帳戶「${confirmState.target}」及 ${res.deletedCount ?? confirmState.linkedCount} 筆關聯交易`,
@@ -618,13 +625,22 @@ export default function SettingsScreen() {
                     },
                   ]}
                 >
-                  <View style={[styles.itemDot, { backgroundColor: meta.color }]} />
-                  <Text style={[styles.itemChipText, { color: colors.text }]}>
-                    {acc}
-                  </Text>
-                  <Text style={[styles.itemCountText, { color: colors.textMuted }]}>
-                    {count}
-                  </Text>
+                  <Pressable
+                    onPress={() => setEditingIconAccount(acc)}
+                    style={styles.itemChipMain}
+                  >
+                    <LedgerIcon
+                      name={settings.accountIcons?.[acc] || meta.icon}
+                      size={14}
+                      color={meta.color}
+                    />
+                    <Text style={[styles.itemChipText, { color: colors.text }]}>
+                      {acc}
+                    </Text>
+                    <Text style={[styles.itemCountText, { color: colors.textMuted }]}>
+                      {count}
+                    </Text>
+                  </Pressable>
                   <Pressable
                     onPress={() => requestDeleteAccount(acc)}
                     hitSlop={8}
@@ -982,6 +998,101 @@ export default function SettingsScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Account Icon Picker Modal */}
+      <Modal
+        visible={editingIconAccount !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingIconAccount(null)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setEditingIconAccount(null)}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={[
+              styles.iconPickerCard,
+              { backgroundColor: colors.surface, borderColor: colors.border },
+            ]}
+          >
+            <View style={styles.iconPickerHeader}>
+              <Text style={[styles.iconPickerTitle, { color: colors.text }]}>
+                選擇「{editingIconAccount}」圖示
+              </Text>
+              <Pressable
+                onPress={() => setEditingIconAccount(null)}
+                hitSlop={8}
+                style={styles.iconPickerCloseBtn}
+              >
+                <X size={18} color={colors.textMuted} />
+              </Pressable>
+            </View>
+
+            <View style={styles.iconPickerGrid}>
+              {ACCOUNT_ICON_OPTIONS.map((opt) => {
+                const currentIcon = editingIconAccount
+                  ? settings.accountIcons?.[editingIconAccount] ||
+                    getAccountMeta(editingIconAccount).icon
+                  : 'Wallet';
+                const selected = currentIcon === opt.name;
+                return (
+                  <Pressable
+                    key={opt.name}
+                    onPress={async () => {
+                      if (!editingIconAccount) return;
+                      const accountName = editingIconAccount;
+                      const iconName = opt.name;
+                      console.log(
+                        `[SettingsScreen/accountIcon] Update - Account:${accountName}, Icon:${iconName}`,
+                      );
+                      setEditingIconAccount(null);
+                      try {
+                        await updateSettings({
+                          accountIcons: {
+                            ...(settings.accountIcons || {}),
+                            [accountName]: iconName,
+                          },
+                        });
+                      } catch (err) {
+                        showFeedback(
+                          'error',
+                          err instanceof Error ? err.message : '更新帳戶圖示失敗',
+                        );
+                      }
+                    }}
+                    style={[
+                      styles.iconPickerItem,
+                      {
+                        backgroundColor: selected
+                          ? colors.primaryLight
+                          : colors.surfaceElevated,
+                        borderColor: selected ? colors.primary : colors.border,
+                      },
+                    ]}
+                  >
+                    <LedgerIcon
+                      name={opt.name}
+                      size={20}
+                      color={selected ? colors.primary : colors.text}
+                    />
+                    <Text
+                      style={[
+                        styles.iconPickerLabel,
+                        { color: selected ? colors.primary : colors.textSecondary },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -1156,6 +1267,11 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
   },
+  itemChipMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   itemDot: {
     width: 8,
     height: 8,
@@ -1313,5 +1429,42 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  iconPickerCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    padding: 18,
+  },
+  iconPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  iconPickerTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  iconPickerCloseBtn: {
+    padding: 4,
+  },
+  iconPickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  iconPickerItem: {
+    width: '30.5%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  iconPickerLabel: {
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

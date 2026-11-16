@@ -1,22 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Platform,
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
-import * as Haptics from 'expo-haptics';
-import {
-  ArrowRight,
-  Layers,
-  Receipt,
-  Sparkles,
-  Wallet as WalletIcon,
-} from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LedgerIcon } from '@/components/LedgerIcon';
 import { useLedgerStore } from '@/store/useLedgerStore';
@@ -27,15 +16,12 @@ import { computeAccountStats } from '@/utils/analytics';
 import { formatMoney } from '@/utils/currency';
 
 export default function WalletScreen() {
-  const router = useRouter();
   const { colors, isDark } = useAppTheme();
 
   const transactions = useLedgerStore((s) => s.transactions);
   const settings = useLedgerStore((s) => s.settings);
   const baseCurrency = useLedgerStore((s) => s.baseCurrency);
   const exchangeRates = useLedgerStore((s) => s.exchangeRates);
-  const activeAccountFilter = useLedgerStore((s) => s.filters.account);
-  const setFilter = useLedgerStore((s) => s.setFilter);
   const refreshAll = useLedgerStore((s) => s.refreshAll);
 
   const [refreshing, setRefreshing] = useState(false);
@@ -51,20 +37,10 @@ export default function WalletScreen() {
     [transactions, settings.accounts, baseCurrency, exchangeRates],
   );
 
-  const summary = useMemo(() => {
-    let totalPositive = 0;
-    let totalDebt = 0;
-    for (const acc of accountStats) {
-      if (acc.balance >= 0) totalPositive += acc.balance;
-      else totalDebt += Math.abs(acc.balance);
-    }
-    return {
-      totalPositive,
-      totalDebt,
-      netTotal: totalPositive - totalDebt,
-      activeCount: accountStats.filter((a) => a.transactionCount > 0).length,
-    };
-  }, [accountStats]);
+  const positiveAccounts = useMemo(
+    () => accountStats.filter((item) => item.balance > 0 && item.sharePercentage > 0),
+    [accountStats],
+  );
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -76,24 +52,6 @@ export default function WalletScreen() {
     } finally {
       setRefreshing(false);
     }
-  };
-
-  const handleSelectAccount = (account: string) => {
-    console.log(`[WalletScreen/selectAccount] Tap - Account:${account}`);
-    if (Platform.OS !== 'web') {
-      Haptics.selectionAsync().catch(() => {});
-    }
-    setFilter({ account });
-    router.navigate('/');
-  };
-
-  const handleViewAllTransactions = () => {
-    console.log('[WalletScreen/viewAll] Tap - Clearing account filter');
-    if (Platform.OS !== 'web') {
-      Haptics.selectionAsync().catch(() => {});
-    }
-    setFilter({ account: 'ALL' });
-    router.navigate('/');
   };
 
   return (
@@ -115,74 +73,82 @@ export default function WalletScreen() {
       >
         {/* Header */}
         <View style={styles.headerRow}>
-          <View>
-            <Text style={[styles.pageTitle, { color: colors.text }]}>帳戶錢包</Text>
-            <Text style={[styles.pageSubtitle, { color: colors.textMuted }]}>
-              點擊任一帳戶卡片即可篩選首頁明細
-            </Text>
-          </View>
-          <Pressable
-            onPress={handleViewAllTransactions}
-            style={({ pressed }) => [
-              styles.allTxBtn,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-              pressed && { opacity: 0.75 },
-            ]}
-          >
-            <Layers size={14} color={colors.primary} />
-            <Text style={[styles.allTxBtnText, { color: colors.primary }]}>全部明細</Text>
-          </Pressable>
+          <Text style={[styles.pageTitle, { color: colors.text }]}>帳戶錢包</Text>
         </View>
 
-        {/* Wallet Overview Summary Strip */}
+        {/* Multi-account Distribution Bar Card (iPhone Storage Style) */}
         <View
           style={[
-            styles.summaryBanner,
+            styles.distributionCard,
             {
-              backgroundColor: isDark ? '#0B2E2B' : '#064E3B',
+              backgroundColor: colors.card,
+              borderColor: colors.cardBorder,
               shadowColor: colors.shadow,
+              shadowOpacity: isDark ? 0.35 : 0.08,
             },
           ]}
         >
-          <View style={styles.summaryTopRow}>
-            <View style={styles.summaryBadge}>
-              <WalletIcon size={13} color="#A7F3D0" />
-              <Text style={styles.summaryBadgeText}>
-                {accountStats.length} 個帳戶 · {summary.activeCount} 個活躍
-              </Text>
-            </View>
-            <View style={styles.summaryCurrencyPill}>
-              <Sparkles size={11} color="#6EE7B7" />
-              <Text style={styles.summaryCurrencyText}>{baseCurrency}</Text>
-            </View>
+          <View style={styles.distributionHeader}>
+            <Text style={[styles.distributionTitle, { color: colors.text }]}>
+              資產分佈
+            </Text>
+            <Text style={[styles.distributionSubtitle, { color: colors.textMuted }]}>
+              {positiveAccounts.length} 個正資產帳戶 · {baseCurrency}
+            </Text>
           </View>
 
-          <Text style={styles.summaryLabel}>帳戶淨資產總額</Text>
-          <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
-            {formatMoney(summary.netTotal, baseCurrency, true)}
-          </Text>
-
-          <View style={styles.summarySubRow}>
-            <View style={styles.summaryMetric}>
-              <Text style={styles.summaryMetricLabel}>正資產總計</Text>
-              <Text style={styles.summaryMetricPos}>
-                {formatMoney(summary.totalPositive, baseCurrency, true)}
-              </Text>
-            </View>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryMetric}>
-              <Text style={styles.summaryMetricLabel}>負債 / 待付</Text>
-              <Text style={styles.summaryMetricNeg}>
-                {formatMoney(summary.totalDebt, baseCurrency, true)}
-              </Text>
-            </View>
+          <View style={[styles.distributionTrack, { backgroundColor: colors.divider }]}>
+            {positiveAccounts.length > 0 ? (
+              positiveAccounts.map((item) => {
+                const segColor = getAccountMeta(item.account).color;
+                return (
+                  <View
+                    key={item.account}
+                    style={[
+                      styles.distributionSegment,
+                      {
+                        flexGrow: item.sharePercentage,
+                        flexShrink: 1,
+                        flexBasis: 0,
+                        backgroundColor: segColor,
+                      },
+                    ]}
+                  />
+                );
+              })
+            ) : null}
           </View>
+
+          {positiveAccounts.length > 0 ? (
+            <View style={styles.legendWrap}>
+              {positiveAccounts.map((item) => {
+                const segColor = getAccountMeta(item.account).color;
+                return (
+                  <View key={item.account} style={styles.legendItem}>
+                    <View
+                      style={[styles.legendDot, { backgroundColor: segColor }]}
+                    />
+                    <Text
+                      style={[styles.legendLabel, { color: colors.textSecondary }]}
+                      numberOfLines={1}
+                    >
+                      {item.account}
+                    </Text>
+                    <Text style={[styles.legendPct, { color: colors.textMuted }]}>
+                      {item.sharePercentage.toFixed(1)}%
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <Text style={[styles.emptyDistributionText, { color: colors.textMuted }]}>
+              尚無正資產分佈紀錄
+            </Text>
+          )}
         </View>
 
-        {/* Apple Wallet / Revolut Style Stacked Account Deck */}
+        {/* Simplified Account Deck */}
         <View style={styles.deckContainer}>
           {accountStats.map((item, index) => (
             <AccountDeckCard
@@ -190,8 +156,7 @@ export default function WalletScreen() {
               item={item}
               index={index}
               baseCurrency={baseCurrency}
-              isSelected={activeAccountFilter === item.account}
-              onPress={() => handleSelectAccount(item.account)}
+              customIcon={settings.accountIcons?.[item.account]}
             />
           ))}
         </View>
@@ -204,96 +169,72 @@ interface AccountDeckCardProps {
   item: AccountStat;
   index: number;
   baseCurrency: string;
-  isSelected: boolean;
-  onPress: () => void;
+  customIcon?: string;
 }
 
 function AccountDeckCard({
   item,
   index,
   baseCurrency,
-  isSelected,
-  onPress,
+  customIcon,
 }: AccountDeckCardProps) {
   const { colors, isDark } = useAppTheme();
-  const meta = getAccountMeta(item.account);
-
-  const currencyEntries = useMemo(
-    () =>
-      Object.entries(item.currencyBreakdown)
-        .filter(([, amt]) => Math.abs(amt) > 0.0001)
-        .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])),
-    [item.currencyBreakdown],
-  );
 
   const isNegative = item.balance < 0;
-  const barWidthPct = Math.min(100, Math.max(item.sharePercentage, item.balance > 0 ? 4 : 0));
+  const accentColor = isNegative ? colors.expense : colors.income;
+  const accentBgColor = isNegative ? colors.expenseBg : colors.incomeBg;
+  const barWidthPct = isNegative
+    ? 100
+    : Math.min(100, Math.max(item.sharePercentage, item.balance > 0 ? 4 : 0));
 
   return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [
+    <View
+      style={[
         styles.walletCard,
         {
           backgroundColor: colors.card,
-          borderColor: isSelected ? colors.primary : colors.cardBorder,
-          borderWidth: isSelected ? 1.8 : 1,
+          borderColor: colors.cardBorder,
+          borderWidth: 1,
           shadowColor: colors.shadow,
           shadowOpacity: isDark ? 0.4 : 0.09,
           marginTop: index === 0 ? 0 : 12,
         },
-        pressed && { transform: [{ scale: 0.985 }], opacity: 0.92 },
       ]}
-      accessibilityRole="button"
       accessibilityLabel={`${item.account} 餘額 ${formatMoney(item.balance, baseCurrency)}`}
     >
-      {/* Top Colored Card Accent Strip (Apple Wallet / Revolut signature edge) */}
-      <View style={[styles.cardAccentStrip, { backgroundColor: meta.color }]} />
+      {/* Top Colored Card Accent Strip */}
+      <View style={[styles.cardAccentStrip, { backgroundColor: accentColor }]} />
 
       <View style={styles.cardBody}>
-        {/* Card Header */}
         <View style={styles.cardTopRow}>
           <View style={styles.cardIdentity}>
-            <View style={[styles.accountIconBox, { backgroundColor: meta.bgColor }]}>
-              <LedgerIcon name={meta.icon} size={18} color={meta.color} strokeWidth={2.2} />
+            <View style={[styles.accountIconBox, { backgroundColor: accentBgColor }]}>
+              <LedgerIcon
+                name={customIcon || item.icon}
+                size={18}
+                color={accentColor}
+                strokeWidth={2.2}
+              />
             </View>
-            <View style={styles.cardTitleGroup}>
-              <View style={styles.cardNameRow}>
-                <Text style={[styles.cardAccountName, { color: colors.text }]} numberOfLines={1}>
-                  {item.account}
-                </Text>
-                {isSelected && (
-                  <View style={[styles.activeFilterTag, { backgroundColor: colors.primaryLight }]}>
-                    <Text style={[styles.activeFilterTagText, { color: colors.primary }]}>
-                      已篩選
-                    </Text>
-                  </View>
-                )}
-              </View>
-              <View style={styles.txCountRow}>
-                <Receipt size={11} color={colors.textMuted} />
-                <Text style={[styles.txCountText, { color: colors.textMuted }]}>
-                  {item.transactionCount} 筆交易
-                </Text>
-              </View>
-            </View>
+            <Text
+              style={[styles.cardAccountName, { color: colors.text }]}
+              numberOfLines={1}
+            >
+              {item.account}
+            </Text>
           </View>
 
           <View style={styles.cardBalanceCol}>
             <Text
-              style={[
-                styles.cardBalance,
-                { color: isNegative ? colors.expense : colors.text },
-              ]}
+              style={[styles.cardBalance, { color: accentColor }]}
               numberOfLines={1}
             >
               {formatMoney(item.balance, baseCurrency, true)}
             </Text>
-            <View style={styles.goDetailRow}>
-              <Text style={[styles.shareText, { color: meta.color }]}>
-                資產佔比 {item.sharePercentage.toFixed(1)}%
+            <View style={[styles.statusPill, { backgroundColor: accentBgColor }]}>
+              <Text style={[styles.statusPillText, { color: accentColor }]}>
+                {isNegative ? '待付' : `${item.sharePercentage.toFixed(1)}%`}
               </Text>
-              <ArrowRight size={12} color={colors.textMuted} />
             </View>
           </View>
         </View>
@@ -305,47 +246,13 @@ function AccountDeckCard({
               styles.shareFill,
               {
                 width: `${barWidthPct}%`,
-                backgroundColor: isNegative ? colors.expense : meta.color,
+                backgroundColor: accentColor,
               },
             ]}
           />
         </View>
-
-        {/* Original Currency Breakdown Pills */}
-        {currencyEntries.length > 0 ? (
-          <View style={styles.breakdownRow}>
-            {currencyEntries.map(([cur, amt]) => (
-              <View
-                key={cur}
-                style={[
-                  styles.currencyBreakPill,
-                  {
-                    backgroundColor: colors.surfaceElevated,
-                    borderColor: colors.border,
-                  },
-                ]}
-              >
-                <Text style={[styles.currencyBreakCode, { color: colors.textMuted }]}>
-                  {cur}
-                </Text>
-                <Text
-                  style={[
-                    styles.currencyBreakAmt,
-                    { color: amt < 0 ? colors.expense : colors.textSecondary },
-                  ]}
-                >
-                  {formatMoney(amt, cur, true)}
-                </Text>
-              </View>
-            ))}
-          </View>
-        ) : (
-          <Text style={[styles.emptyBreakdownText, { color: colors.textMuted }]}>
-            尚無原幣別餘額紀錄
-          </Text>
-        )}
       </View>
-    </Pressable>
+    </View>
   );
 }
 
@@ -363,120 +270,73 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
+    marginBottom: 2,
   },
   pageTitle: {
-    fontSize: 24,
+    fontSize: 26,
     fontWeight: '800',
-    letterSpacing: -0.4,
+    letterSpacing: -0.5,
   },
-  pageSubtitle: {
-    fontSize: 12,
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  allTxBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 14,
+  distributionCard: {
+    borderRadius: 20,
     borderWidth: 1,
+    padding: 16,
+    gap: 12,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+    elevation: 3,
   },
-  allTxBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  summaryBanner: {
-    borderRadius: 24,
-    padding: 18,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.22,
-    shadowRadius: 16,
-    elevation: 7,
-  },
-  summaryTopRow: {
+  distributionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  summaryBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-  },
-  summaryBadgeText: {
-    color: '#ECFDF5',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  summaryCurrencyPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: 'rgba(16, 185, 129, 0.2)',
-  },
-  summaryCurrencyText: {
-    color: '#A7F3D0',
-    fontSize: 11,
+  distributionTitle: {
+    fontSize: 15,
     fontWeight: '800',
   },
-  summaryLabel: {
-    color: 'rgba(226, 232, 240, 0.78)',
+  distributionSubtitle: {
     fontSize: 12,
     fontWeight: '600',
-    marginTop: 14,
-  },
-  summaryValue: {
-    color: '#FFFFFF',
-    fontSize: 30,
-    fontWeight: '800',
-    marginTop: 4,
     fontVariant: ['tabular-nums'],
   },
-  summarySubRow: {
+  distributionTrack: {
+    flexDirection: 'row',
+    height: 12,
+    borderRadius: 6,
+    overflow: 'hidden',
+    gap: 2,
+  },
+  distributionSegment: {
+    height: '100%',
+  },
+  legendWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.14)',
+    gap: 5,
   },
-  summaryMetric: {
-    flex: 1,
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
-  summaryDivider: {
-    width: 1,
-    height: 28,
-    backgroundColor: 'rgba(255, 255, 255, 0.14)',
-    marginHorizontal: 12,
-  },
-  summaryMetricLabel: {
-    color: 'rgba(226, 232, 240, 0.72)',
-    fontSize: 11,
+  legendLabel: {
+    fontSize: 12,
     fontWeight: '600',
   },
-  summaryMetricPos: {
-    color: '#6EE7B7',
-    fontSize: 15,
+  legendPct: {
+    fontSize: 11,
     fontWeight: '700',
-    marginTop: 3,
     fontVariant: ['tabular-nums'],
   },
-  summaryMetricNeg: {
-    color: '#FDA4AF',
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 3,
-    fontVariant: ['tabular-nums'],
+  emptyDistributionText: {
+    fontSize: 12,
+    fontStyle: 'italic',
   },
   deckContainer: {
     paddingBottom: 6,
@@ -516,55 +376,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardTitleGroup: {
-    flex: 1,
-    minWidth: 0,
-    gap: 3,
-  },
-  cardNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
   cardAccountName: {
     fontSize: 16,
     fontWeight: '800',
     flexShrink: 1,
   },
-  activeFilterTag: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 999,
-  },
-  activeFilterTagText: {
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  txCountRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  txCountText: {
-    fontSize: 11,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
-  },
   cardBalanceCol: {
     alignItems: 'flex-end',
-    gap: 3,
+    gap: 4,
   },
   cardBalance: {
     fontSize: 17,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
-  goDetailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
+  statusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
   },
-  shareText: {
+  statusPillText: {
     fontSize: 11,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
@@ -578,32 +409,5 @@ const styles = StyleSheet.create({
   shareFill: {
     height: '100%',
     borderRadius: 3,
-  },
-  breakdownRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  currencyBreakPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  currencyBreakCode: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  currencyBreakAmt: {
-    fontSize: 12,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  emptyBreakdownText: {
-    fontSize: 11,
-    fontStyle: 'italic',
   },
 });

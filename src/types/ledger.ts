@@ -56,6 +56,7 @@ export interface CustomSettings {
   categories: string[];
   currencies: CurrencyCode[];
   baseCurrency: CurrencyCode;
+  accountIcons?: Record<string, string>;
   aiProxyUrl?: string;
   simulate503?: boolean;
   themeMode?: 'light' | 'dark' | 'system';
