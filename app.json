@@ -17,9 +17,11 @@
     },
     "android": {
       "package": "com.gemledger.app",
+      "versionCode": 1,
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.READ_MEDIA_IMAGES"
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -35,10 +37,28 @@
           "photosPermission": "允許 GemLedger-26 存取相簿以選擇收據進行 AI 辨識記帳。",
           "cameraPermission": "允許 GemLedger-26 使用相機拍攝收據進行 AI 辨識記帳。"
         }
-      ]
+      ],
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ],
+      "./plugins/withAndroidBuildFix.js"
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "eacf3216-73d6-42a6-add7-c252c449c2b3"
+      }
     }
   }
 }

@@ -800,6 +800,345 @@ export const Database = {
     };
   },
 
+  async renameAccount(oldName: string, newName: string): Promise<ApiActionResult> {
+    const oldClean = String(oldName || '').trim();
+    const newClean = String(newName || '').trim();
+    if (!oldClean || !newClean) throw new Error('帳戶名稱不可為空');
+    if (oldClean === newClean) {
+      return { success: true, count: 0, message: '帳戶名稱未變更' };
+    }
+
+    const currentSettings = await this.getSettings();
+    if (!currentSettings.accounts.includes(oldClean)) {
+      throw new Error(`找不到帳戶「${oldClean}」`);
+    }
+    if (currentSettings.accounts.includes(newClean)) {
+      throw new Error(`帳戶「${newClean}」已存在`);
+    }
+
+    const nextAccounts = currentSettings.accounts.map((a) => (a === oldClean ? newClean : a));
+    const nextIcons = currentSettings.accountIcons
+      ? { ...currentSettings.accountIcons }
+      : undefined;
+    if (nextIcons && oldClean in nextIcons) {
+      if (!(newClean in nextIcons)) {
+        nextIcons[newClean] = nextIcons[oldClean];
+      }
+      delete nextIcons[oldClean];
+    }
+
+    console.log(`[Database/renameAccount] Start - ${oldClean} -> ${newClean}`);
+
+    if (!isNativeMobileRuntime()) {
+      const nextSettings: CustomSettings = {
+        ...currentSettings,
+        accounts: nextAccounts,
+        ...(nextIcons ? { accountIcons: nextIcons } : {}),
+      };
+      LocalStorageBackend.saveSettings(nextSettings);
+
+      const data = LocalStorageBackend.getTransactions();
+      let updatedCount = 0;
+      const nowIso = new Date().toISOString();
+      const nextData = data.map((tx) => {
+        const matchAccount = (tx.account || '').trim() === oldClean;
+        const txWithTo = tx as Transaction & { toAccount?: string };
+        const matchToAccount =
+          typeof txWithTo.toAccount === 'string' && txWithTo.toAccount.trim() === oldClean;
+        if (!matchAccount && !matchToAccount) return tx;
+        updatedCount += 1;
+        return {
+          ...tx,
+          ...(matchAccount ? { account: newClean } : {}),
+          ...(matchToAccount ? { toAccount: newClean } : {}),
+          updatedAt: nowIso,
+        };
+      });
+      LocalStorageBackend.saveTransactions(nextData);
+      console.log(`[Database/renameAccount] Done - Local UpdatedTx:${updatedCount}`);
+      return {
+        success: true,
+        count: updatedCount,
+        message: `已將帳戶「${oldClean}」更名為「${newClean}」（同步更新 ${updatedCount} 筆紀錄）`,
+      };
+    }
+
+    const db = await getSqliteDb();
+    let updatedCount = 0;
+    await db.withTransactionAsync(async () => {
+      const nextSettings: CustomSettings = {
+        ...currentSettings,
+        accounts: nextAccounts,
+        ...(nextIcons ? { accountIcons: nextIcons } : {}),
+      };
+      await db.runAsync(
+        'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+        ['custom_settings', JSON.stringify(nextSettings)],
+      );
+      const res = await db.runAsync(
+        'UPDATE transactions SET account = ?, updated_at = CURRENT_TIMESTAMP WHERE TRIM(account) = ?',
+        [newClean, oldClean],
+      );
+      updatedCount = res.changes;
+    });
+    console.log(`[Database/renameAccount] Done - SQLite UpdatedTx:${updatedCount}`);
+    return {
+      success: true,
+      count: updatedCount,
+      message: `已將帳戶「${oldClean}」更名為「${newClean}」（同步更新 ${updatedCount} 筆紀錄）`,
+    };
+  },
+
+  async renameCategory(oldName: string, newName: string): Promise<ApiActionResult> {
+    const oldClean = String(oldName || '').trim();
+    const newClean = String(newName || '').trim();
+    if (!oldClean || !newClean) throw new Error('分類名稱不可為空');
+    if (oldClean === newClean) {
+      return { success: true, count: 0, message: '分類名稱未變更' };
+    }
+
+    const currentSettings = await this.getSettings();
+    if (!currentSettings.categories.includes(oldClean)) {
+      throw new Error(`找不到分類「${oldClean}」`);
+    }
+    if (currentSettings.categories.includes(newClean)) {
+      throw new Error(`分類「${newClean}」已存在`);
+    }
+
+    const nextCategories = currentSettings.categories.map((c) => (c === oldClean ? newClean : c));
+    console.log(`[Database/renameCategory] Start - ${oldClean} -> ${newClean}`);
+
+    if (!isNativeMobileRuntime()) {
+      LocalStorageBackend.saveSettings({
+        ...currentSettings,
+        categories: nextCategories,
+      });
+      const data = LocalStorageBackend.getTransactions();
+      let updatedCount = 0;
+      const nowIso = new Date().toISOString();
+      const nextData = data.map((tx) => {
+        if ((tx.category || '').trim() !== oldClean) return tx;
+        updatedCount += 1;
+        return { ...tx, category: newClean, updatedAt: nowIso };
+      });
+      LocalStorageBackend.saveTransactions(nextData);
+      console.log(`[Database/renameCategory] Done - Local UpdatedTx:${updatedCount}`);
+      return {
+        success: true,
+        count: updatedCount,
+        message: `已將分類「${oldClean}」更名為「${newClean}」（同步更新 ${updatedCount} 筆紀錄）`,
+      };
+    }
+
+    const db = await getSqliteDb();
+    let updatedCount = 0;
+    await db.withTransactionAsync(async () => {
+      await db.runAsync(
+        'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+        ['custom_settings', JSON.stringify({ ...currentSettings, categories: nextCategories })],
+      );
+      const res = await db.runAsync(
+        'UPDATE transactions SET category = ?, updated_at = CURRENT_TIMESTAMP WHERE TRIM(category) = ?',
+        [newClean, oldClean],
+      );
+      updatedCount = res.changes;
+    });
+    console.log(`[Database/renameCategory] Done - SQLite UpdatedTx:${updatedCount}`);
+    return {
+      success: true,
+      count: updatedCount,
+      message: `已將分類「${oldClean}」更名為「${newClean}」（同步更新 ${updatedCount} 筆紀錄）`,
+    };
+  },
+
+  async mergeCategories(sourceCategory: string, targetCategory: string): Promise<ApiActionResult> {
+    const sourceClean = String(sourceCategory || '').trim();
+    const targetClean = String(targetCategory || '').trim();
+    if (!sourceClean || !targetClean) throw new Error('來源與目標分類不可為空');
+    if (sourceClean === targetClean) throw new Error('來源與目標分類不可相同');
+
+    const currentSettings = await this.getSettings();
+    if (!currentSettings.categories.includes(sourceClean)) {
+      throw new Error(`找不到來源分類「${sourceClean}」`);
+    }
+    if (!currentSettings.categories.includes(targetClean)) {
+      throw new Error(`找不到目標分類「${targetClean}」`);
+    }
+
+    const nextCategories = currentSettings.categories.filter((c) => c !== sourceClean);
+    console.log(`[Database/mergeCategories] Start - ${sourceClean} -> ${targetClean}`);
+
+    if (!isNativeMobileRuntime()) {
+      LocalStorageBackend.saveSettings({
+        ...currentSettings,
+        categories: nextCategories,
+      });
+      const data = LocalStorageBackend.getTransactions();
+      let movedCount = 0;
+      const nowIso = new Date().toISOString();
+      const nextData = data.map((tx) => {
+        if ((tx.category || '').trim() !== sourceClean) return tx;
+        movedCount += 1;
+        return { ...tx, category: targetClean, updatedAt: nowIso };
+      });
+      LocalStorageBackend.saveTransactions(nextData);
+      console.log(`[Database/mergeCategories] Done - Local MovedTx:${movedCount}`);
+      return {
+        success: true,
+        count: movedCount,
+        message: `已將「${sourceClean}」合併至「${targetClean}」（轉移 ${movedCount} 筆紀錄）`,
+      };
+    }
+
+    const db = await getSqliteDb();
+    let movedCount = 0;
+    await db.withTransactionAsync(async () => {
+      await db.runAsync(
+        'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+        ['custom_settings', JSON.stringify({ ...currentSettings, categories: nextCategories })],
+      );
+      const res = await db.runAsync(
+        'UPDATE transactions SET category = ?, updated_at = CURRENT_TIMESTAMP WHERE TRIM(category) = ?',
+        [targetClean, sourceClean],
+      );
+      movedCount = res.changes;
+    });
+    console.log(`[Database/mergeCategories] Done - SQLite MovedTx:${movedCount}`);
+    return {
+      success: true,
+      count: movedCount,
+      message: `已將「${sourceClean}」合併至「${targetClean}」（轉移 ${movedCount} 筆紀錄）`,
+    };
+  },
+
+  async importTransactions(
+    items: Omit<Transaction, 'id' | 'rowNumber'>[],
+    mode: 'append' | 'overwrite',
+  ): Promise<ApiActionResult> {
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error('匯入資料為空');
+    }
+
+    const normalized = items.map((raw) => normalizeInput(raw));
+    const currentSettings = await this.getSettings();
+
+    let nextAccounts: string[];
+    let nextCategories: string[];
+    let nextAccountIcons = { ...(currentSettings.accountIcons ?? {}) };
+    let settingsChanged = false;
+
+    if (mode === 'overwrite') {
+      const csvAccounts = Array.from(
+        new Set(normalized.map((tx) => tx.account).filter(Boolean)),
+      );
+      const csvCategories = Array.from(
+        new Set(normalized.map((tx) => tx.category).filter(Boolean)),
+      );
+      nextAccounts = csvAccounts.length > 0 ? csvAccounts : ['現金'];
+      nextCategories = csvCategories.length > 0 ? csvCategories : ['其他'];
+
+      const allowedAccSet = new Set(nextAccounts);
+      const prunedIcons: Record<string, string> = {};
+      for (const [k, v] of Object.entries(nextAccountIcons)) {
+        if (allowedAccSet.has(k)) prunedIcons[k] = v;
+      }
+      nextAccountIcons = prunedIcons;
+      settingsChanged = true;
+    } else {
+      const accountSet = new Set(currentSettings.accounts);
+      const categorySet = new Set(currentSettings.categories);
+      const newAccounts: string[] = [];
+      const newCategories: string[] = [];
+
+      for (const tx of normalized) {
+        if (tx.account && !accountSet.has(tx.account)) {
+          accountSet.add(tx.account);
+          newAccounts.push(tx.account);
+        }
+        if (tx.category && !categorySet.has(tx.category)) {
+          categorySet.add(tx.category);
+          newCategories.push(tx.category);
+        }
+      }
+
+      nextAccounts = [...currentSettings.accounts, ...newAccounts];
+      nextCategories = [...currentSettings.categories, ...newCategories];
+      settingsChanged = newAccounts.length > 0 || newCategories.length > 0;
+    }
+
+    const nextSettings: CustomSettings = {
+      ...currentSettings,
+      accounts: nextAccounts,
+      categories: nextCategories,
+      accountIcons: nextAccountIcons,
+    };
+
+    console.log(
+      `[Database/importTransactions] Start - Mode:${mode}, Count:${normalized.length}, Accounts:${nextAccounts.length}, Categories:${nextCategories.length}`,
+    );
+
+    if (!isNativeMobileRuntime()) {
+      if (settingsChanged) {
+        LocalStorageBackend.saveSettings(nextSettings);
+      }
+      const existing = mode === 'overwrite' ? [] : LocalStorageBackend.getTransactions();
+      const startRow =
+        existing.length > 0 ? Math.max(...existing.map((d) => Number(d.rowNumber) || 0)) + 1 : 2;
+      const baseId = Date.now();
+      const appended: Transaction[] = normalized.map((clean, idx) => ({
+        id: baseId + idx,
+        rowNumber: startRow + idx,
+        ...clean,
+      }));
+      LocalStorageBackend.saveTransactions([...existing, ...appended]);
+      console.log(`[Database/importTransactions] Done - Local Imported:${appended.length}`);
+      return {
+        success: true,
+        count: appended.length,
+        message: `成功${mode === 'overwrite' ? '覆寫' : '附加'}匯入 ${appended.length} 筆紀錄！`,
+      };
+    }
+
+    const db = await getSqliteDb();
+    await db.withTransactionAsync(async () => {
+      if (settingsChanged) {
+        await db.runAsync(
+          'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+          ['custom_settings', JSON.stringify(nextSettings)],
+        );
+      }
+      if (mode === 'overwrite') {
+        await db.runAsync('DELETE FROM transactions');
+      }
+      for (const clean of normalized) {
+        const res = await db.runAsync(
+          `INSERT INTO transactions (date, time, account, name, category, currency, amount, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            clean.date,
+            clean.time,
+            clean.account,
+            clean.name,
+            clean.category,
+            clean.currency,
+            clean.amount,
+            clean.note,
+          ],
+        );
+        await db.runAsync('UPDATE transactions SET row_number = ? WHERE id = ?', [
+          res.lastInsertRowId + 1,
+          res.lastInsertRowId,
+        ]);
+      }
+    });
+    console.log(`[Database/importTransactions] Done - SQLite Imported:${normalized.length}`);
+    return {
+      success: true,
+      count: normalized.length,
+      message: `成功${mode === 'overwrite' ? '覆寫' : '附加'}匯入 ${normalized.length} 筆紀錄！`,
+    };
+  },
+
   async getCachedExchangeRates(): Promise<ExchangeRates | null> {
     if (!isNativeMobileRuntime()) {
       return LocalStorageBackend.getCachedFX();

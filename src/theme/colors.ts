@@ -120,13 +120,16 @@ const CATEGORY_META_MAP: Record<string, CategoryMeta> = {
 };
 
 const FALLBACK_PALETTE = [
-  '#0F766E',
-  '#0284C7',
-  '#7C3AED',
-  '#DB2777',
-  '#D97706',
-  '#059669',
-  '#4F46E5',
+  '#3B82F6',
+  '#F97316',
+  '#8B5CF6',
+  '#06B6D4',
+  '#EC4899',
+  '#EAB308',
+  '#10B981',
+  '#6366F1',
+  '#EF4444',
+  '#14B8A6',
 ];
 
 function hashColor(key: string): string {
@@ -159,16 +162,16 @@ export interface AccountMeta {
 }
 
 const ACCOUNT_META_MAP: Record<string, AccountMeta> = {
-  '現金': { color: '#10B981', bgColor: 'rgba(16, 185, 129, 0.15)', icon: 'Banknote', shortLabel: '現金' },
-  'LINE Pay': { color: '#06C755', bgColor: 'rgba(6, 199, 85, 0.15)', icon: 'Smartphone', shortLabel: 'LP' },
-  'LINE Bank': { color: '#00B900', bgColor: 'rgba(0, 185, 0, 0.15)', icon: 'Building2', shortLabel: 'LB' },
-  '郵局': { color: '#15803D', bgColor: 'rgba(21, 128, 61, 0.15)', icon: 'Landmark', shortLabel: '郵局' },
-  '永豐銀行': { color: '#DC2626', bgColor: 'rgba(220, 38, 38, 0.15)', icon: 'Landmark', shortLabel: '永豐' },
-  '國泰世華': { color: '#16A34A', bgColor: 'rgba(22, 163, 74, 0.15)', icon: 'CreditCard', shortLabel: '國泰' },
-  '玉山銀行': { color: '#0D9488', bgColor: 'rgba(13, 148, 136, 0.15)', icon: 'CreditCard', shortLabel: '玉山' },
-  '悠遊卡': { color: '#0284C7', bgColor: 'rgba(2, 132, 199, 0.15)', icon: 'Ticket', shortLabel: '悠遊' },
-  '街口支付': { color: '#E11D48', bgColor: 'rgba(225, 29, 72, 0.15)', icon: 'Zap', shortLabel: '街口' },
-  '台新Richart': { color: '#BE123C', bgColor: 'rgba(190, 18, 60, 0.15)', icon: 'Wallet', shortLabel: 'Richart' },
+  '現金': { color: '#10B981', bgColor: 'rgba(16, 185, 129, 0.16)', icon: 'Banknote', shortLabel: '現金' },
+  'LINE Pay': { color: '#06B6D4', bgColor: 'rgba(6, 182, 212, 0.16)', icon: 'Smartphone', shortLabel: 'LP' },
+  'LINE Bank': { color: '#3B82F6', bgColor: 'rgba(59, 130, 246, 0.16)', icon: 'Building2', shortLabel: 'LB' },
+  '郵局': { color: '#14B8A6', bgColor: 'rgba(20, 184, 166, 0.16)', icon: 'Landmark', shortLabel: '郵局' },
+  '永豐銀行': { color: '#EF4444', bgColor: 'rgba(239, 68, 68, 0.16)', icon: 'Landmark', shortLabel: '永豐' },
+  '國泰世華': { color: '#EAB308', bgColor: 'rgba(234, 179, 8, 0.16)', icon: 'CreditCard', shortLabel: '國泰' },
+  '玉山銀行': { color: '#8B5CF6', bgColor: 'rgba(139, 92, 246, 0.16)', icon: 'CreditCard', shortLabel: '玉山' },
+  '悠遊卡': { color: '#6366F1', bgColor: 'rgba(99, 102, 241, 0.16)', icon: 'Ticket', shortLabel: '悠遊' },
+  '街口支付': { color: '#F97316', bgColor: 'rgba(249, 115, 22, 0.16)', icon: 'Zap', shortLabel: '街口' },
+  '台新Richart': { color: '#EC4899', bgColor: 'rgba(236, 72, 153, 0.16)', icon: 'Wallet', shortLabel: 'Richart' },
 };
 
 export function getAccountMeta(account: string): AccountMeta {

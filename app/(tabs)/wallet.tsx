@@ -7,6 +7,14 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, {
+  Circle,
+  Defs,
+  LinearGradient,
+  RadialGradient,
+  Rect,
+  Stop,
+} from 'react-native-svg';
 import { LedgerIcon } from '@/components/LedgerIcon';
 import { useLedgerStore } from '@/store/useLedgerStore';
 import { getAccountMeta } from '@/theme/colors';
@@ -179,6 +187,7 @@ function AccountDeckCard({
   customIcon,
 }: AccountDeckCardProps) {
   const { colors, isDark } = useAppTheme();
+  const meta = getAccountMeta(item.account);
 
   const isNegative = item.balance < 0;
   const accentColor = isNegative ? colors.expense : colors.income;
@@ -186,6 +195,9 @@ function AccountDeckCard({
   const barWidthPct = isNegative
     ? 100
     : Math.min(100, Math.max(item.sharePercentage, item.balance > 0 ? 4 : 0));
+
+  const linearGradId = `walletCardLinear-${index}`;
+  const radialGradId = `walletCardRadial-${index}`;
 
   return (
     <View
@@ -202,17 +214,35 @@ function AccountDeckCard({
       ]}
       accessibilityLabel={`${item.account} 餘額 ${formatMoney(item.balance, baseCurrency)}`}
     >
+      {/* Subtle Account Brand Gradient & Top-Right Glow */}
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Svg width="100%" height="100%" preserveAspectRatio="none">
+          <Defs>
+            <LinearGradient id={linearGradId} x1="0%" y1="0%" x2="100%" y2="100%">
+              <Stop offset="0%" stopColor={meta.color} stopOpacity={0.18} />
+              <Stop offset="65%" stopColor={meta.color} stopOpacity={0} />
+            </LinearGradient>
+            <RadialGradient id={radialGradId} cx="50%" cy="50%" r="50%">
+              <Stop offset="0%" stopColor={meta.color} stopOpacity={0.2} />
+              <Stop offset="100%" stopColor={meta.color} stopOpacity={0} />
+            </RadialGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height="100%" fill={`url(#${linearGradId})`} />
+          <Circle cx="92%" cy="18%" r="96" fill={`url(#${radialGradId})`} />
+        </Svg>
+      </View>
+
       {/* Top Colored Card Accent Strip */}
-      <View style={[styles.cardAccentStrip, { backgroundColor: accentColor }]} />
+      <View style={[styles.cardAccentStrip, { backgroundColor: meta.color }]} />
 
       <View style={styles.cardBody}>
         <View style={styles.cardTopRow}>
           <View style={styles.cardIdentity}>
-            <View style={[styles.accountIconBox, { backgroundColor: accentBgColor }]}>
+            <View style={[styles.accountIconBox, { backgroundColor: meta.bgColor }]}>
               <LedgerIcon
                 name={customIcon || item.icon}
                 size={18}
-                color={accentColor}
+                color={meta.color}
                 strokeWidth={2.2}
               />
             </View>

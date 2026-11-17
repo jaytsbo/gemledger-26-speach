@@ -1,8 +1,0 @@
-# Ignore everything by default
-**/**
-
-# Whitelist files to push to Google Apps Script
-!Code.js
-!Code.gs
-!index.html
-!appsscript.json

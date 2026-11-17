@@ -45,14 +45,21 @@ export interface LedgerState {
   updateTransaction: (idOrRow: number | string, item: TransactionInput) => Promise<ApiActionResult>;
   deleteTransaction: (idOrRow: number | string) => Promise<ApiActionResult>;
   addAccount: (accountName: string) => Promise<ApiActionResult>;
+  renameAccount: (oldName: string, newName: string) => Promise<ApiActionResult>;
   removeAccountCascade: (accountName: string) => Promise<ApiActionResult>;
   addCategory: (categoryName: string) => Promise<ApiActionResult>;
+  renameCategory: (oldName: string, newName: string) => Promise<ApiActionResult>;
+  mergeCategories: (sourceCategory: string, targetCategory: string) => Promise<ApiActionResult>;
   removeCategoryCascade: (categoryName: string) => Promise<ApiActionResult>;
+  importTransactions: (
+    items: Omit<Transaction, 'id' | 'rowNumber'>[],
+    mode: 'append' | 'overwrite',
+  ) => Promise<ApiActionResult>;
   updateSettings: (patch: Partial<CustomSettings>) => Promise<ApiActionResult>;
   syncExchangeRates: () => Promise<ExchangeRates>;
   callAI: (
     userMessage: string,
-    imageBase64?: string | null,
+    mediaBase64?: string | null,
     mimeType?: string | null,
   ) => Promise<AIBookkeeperResponse>;
   resetToSeedData: () => Promise<ApiActionResult>;
@@ -240,6 +247,30 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
     return res;
   },
 
+  renameAccount: async (oldName: string, newName: string) => {
+    const oldClean = oldName.trim();
+    const newClean = newName.trim();
+    console.log(`[LedgerStore/renameAccount] Request - ${oldClean} -> ${newClean}`);
+    const res = await ApiService.renameAccount(oldClean, newClean);
+    const [updatedSettings, transactions] = await Promise.all([
+      ApiService.getCustomSettings(),
+      ApiService.getSheetData(true),
+    ]);
+    set((state) => {
+      const nextFilters =
+        state.filters.account === oldClean
+          ? { ...state.filters, account: newClean }
+          : state.filters;
+      return {
+        settings: updatedSettings,
+        transactions,
+        filters: nextFilters,
+        filteredTransactions: filterTransactions(transactions, nextFilters),
+      };
+    });
+    return res;
+  },
+
   removeAccountCascade: async (accountName: string) => {
     const current = get().settings;
     if (current.accounts.length <= 1) {
@@ -284,6 +315,54 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
     return res;
   },
 
+  renameCategory: async (oldName: string, newName: string) => {
+    const oldClean = oldName.trim();
+    const newClean = newName.trim();
+    console.log(`[LedgerStore/renameCategory] Request - ${oldClean} -> ${newClean}`);
+    const res = await ApiService.renameCategory(oldClean, newClean);
+    const [updatedSettings, transactions] = await Promise.all([
+      ApiService.getCustomSettings(),
+      ApiService.getSheetData(true),
+    ]);
+    set((state) => {
+      const nextFilters =
+        state.filters.category === oldClean
+          ? { ...state.filters, category: newClean }
+          : state.filters;
+      return {
+        settings: updatedSettings,
+        transactions,
+        filters: nextFilters,
+        filteredTransactions: filterTransactions(transactions, nextFilters),
+      };
+    });
+    return res;
+  },
+
+  mergeCategories: async (sourceCategory: string, targetCategory: string) => {
+    const sourceClean = sourceCategory.trim();
+    const targetClean = targetCategory.trim();
+    console.log(`[LedgerStore/mergeCategories] Request - ${sourceClean} -> ${targetClean}`);
+    const res = await ApiService.mergeCategories(sourceClean, targetClean);
+    const [updatedSettings, transactions] = await Promise.all([
+      ApiService.getCustomSettings(),
+      ApiService.getSheetData(true),
+    ]);
+    set((state) => {
+      const nextFilters =
+        state.filters.category === sourceClean
+          ? { ...state.filters, category: targetClean }
+          : state.filters;
+      return {
+        settings: updatedSettings,
+        transactions,
+        filters: nextFilters,
+        filteredTransactions: filterTransactions(transactions, nextFilters),
+      };
+    });
+    return res;
+  },
+
   removeCategoryCascade: async (categoryName: string) => {
     const current = get().settings;
     if (current.categories.length <= 1) {
@@ -307,6 +386,24 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
         filteredTransactions: filterTransactions(transactions, nextFilters),
       };
     });
+    return res;
+  },
+
+  importTransactions: async (
+    items: Omit<Transaction, 'id' | 'rowNumber'>[],
+    mode: 'append' | 'overwrite',
+  ) => {
+    console.log(`[LedgerStore/importTransactions] Request - Mode:${mode}, Count:${items.length}`);
+    const res = await ApiService.importTransactions(items, mode);
+    const [updatedSettings, transactions] = await Promise.all([
+      ApiService.getCustomSettings(),
+      ApiService.getSheetData(true),
+    ]);
+    set((state) => ({
+      settings: updatedSettings,
+      transactions,
+      filteredTransactions: filterTransactions(transactions, state.filters),
+    }));
     return res;
   },
 
@@ -341,11 +438,13 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
 
   callAI: async (
     userMessage: string,
-    imageBase64?: string | null,
+    mediaBase64?: string | null,
     mimeType?: string | null,
   ) => {
-    console.log(`[LedgerStore/callAI] Request - MsgLen:${(userMessage || '').length}`);
-    return ApiService.callGeminiBookkeeper(userMessage, imageBase64, mimeType);
+    console.log(
+      `[LedgerStore/callAI] Request - MsgLen:${(userMessage || '').length}, HasMedia:${Boolean(mediaBase64)}, Mime:${mimeType ?? 'none'}`,
+    );
+    return ApiService.callGeminiBookkeeper(userMessage, mediaBase64, mimeType);
   },
 
   resetToSeedData: async () => {

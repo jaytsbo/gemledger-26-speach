@@ -1,6 +1,5 @@
 import {
   AIBookkeeperResponse,
-  AIParsedDraft,
   ApiActionResult,
   CustomSettings,
   ExchangeRates,
@@ -10,6 +9,10 @@ import {
 import { DEFAULT_EXCHANGE_RATES } from '../utils/currency';
 import { Database } from './database';
 import { fallbackParseTransaction } from './fallbackParser';
+import {
+  callGeminiDirectWithKey,
+  loadUserGeminiApiKey,
+} from './geminiDirectService';
 
 declare const google:
   | {
@@ -327,22 +330,116 @@ class ApiServiceImpl {
     return res;
   }
 
+  async renameAccount(oldName: string, newName: string): Promise<ApiActionResult> {
+    this.clearCache();
+    this._log(
+      'renameAccount',
+      'Request',
+      `Env:${isGasEnv ? 'GAS' : 'Local'}, ${oldName} -> ${newName}`,
+    );
+
+    if (isGasEnv) {
+      const res = await callGas<ApiActionResult>('renameAccount', oldName, newName);
+      this._log('renameAccount', 'Response', `GAS Success:${res?.success}, Count:${res?.count ?? 0}`);
+      return res;
+    }
+
+    await mockDelay();
+    const res = await Database.renameAccount(oldName, newName);
+    this._log('renameAccount', 'Response', `Local Success:${res.success}, Count:${res.count ?? 0}`);
+    return res;
+  }
+
+  async renameCategory(oldName: string, newName: string): Promise<ApiActionResult> {
+    this.clearCache();
+    this._log(
+      'renameCategory',
+      'Request',
+      `Env:${isGasEnv ? 'GAS' : 'Local'}, ${oldName} -> ${newName}`,
+    );
+
+    if (isGasEnv) {
+      const res = await callGas<ApiActionResult>('renameCategory', oldName, newName);
+      this._log('renameCategory', 'Response', `GAS Success:${res?.success}, Count:${res?.count ?? 0}`);
+      return res;
+    }
+
+    await mockDelay();
+    const res = await Database.renameCategory(oldName, newName);
+    this._log('renameCategory', 'Response', `Local Success:${res.success}, Count:${res.count ?? 0}`);
+    return res;
+  }
+
+  async mergeCategories(
+    sourceCategory: string,
+    targetCategory: string,
+  ): Promise<ApiActionResult> {
+    this.clearCache();
+    this._log(
+      'mergeCategories',
+      'Request',
+      `Env:${isGasEnv ? 'GAS' : 'Local'}, ${sourceCategory} -> ${targetCategory}`,
+    );
+
+    if (isGasEnv) {
+      const res = await callGas<ApiActionResult>('mergeCategories', sourceCategory, targetCategory);
+      this._log('mergeCategories', 'Response', `GAS Success:${res?.success}, Count:${res?.count ?? 0}`);
+      return res;
+    }
+
+    await mockDelay();
+    const res = await Database.mergeCategories(sourceCategory, targetCategory);
+    this._log('mergeCategories', 'Response', `Local Success:${res.success}, Count:${res.count ?? 0}`);
+    return res;
+  }
+
+  async importTransactions(
+    items: Omit<Transaction, 'id' | 'rowNumber'>[],
+    mode: 'append' | 'overwrite',
+  ): Promise<ApiActionResult> {
+    this.clearCache();
+    this._log(
+      'importTransactions',
+      'Request',
+      `Env:${isGasEnv ? 'GAS' : 'Local'}, Mode:${mode}, Count:${items.length}`,
+    );
+
+    if (isGasEnv) {
+      const res = await callGas<ApiActionResult>('importTransactions', items, mode);
+      this._log('importTransactions', 'Response', `GAS Success:${res?.success}, Count:${res?.count ?? 0}`);
+      return res;
+    }
+
+    await mockDelay();
+    const res = await Database.importTransactions(items, mode);
+    this._log('importTransactions', 'Response', `Local Success:${res.success}, Count:${res.count ?? 0}`);
+    return res;
+  }
+
+  async hasGeminiApiKey(): Promise<boolean> {
+    const key = await loadUserGeminiApiKey();
+    const hasKey = Boolean(key);
+    this._log('hasGeminiApiKey', 'Check', `HasKey:${hasKey}`);
+    return hasKey;
+  }
+
   async callGeminiBookkeeper(
     userMessage: string,
-    imageBase64?: string | null,
+    mediaBase64?: string | null,
     mimeType?: string | null,
   ): Promise<AIBookkeeperResponse> {
+    const isAudio = Boolean(mimeType?.startsWith('audio/'));
     this._log(
       'callGeminiBookkeeper',
       'Request',
-      `Env:${isGasEnv ? 'GAS' : 'Local'}, MsgLen:${(userMessage || '').length}, HasImage:${Boolean(imageBase64)}`,
+      `Env:${isGasEnv ? 'GAS' : 'Local'}, MsgLen:${(userMessage || '').length}, HasMedia:${Boolean(mediaBase64)}, Mime:${mimeType ?? 'none'}`,
     );
 
     if (isGasEnv) {
       const res = await callGas<AIBookkeeperResponse>(
         'callGeminiBookkeeper',
         userMessage,
-        imageBase64,
+        mediaBase64,
         mimeType,
       );
       this._log(
@@ -356,86 +453,47 @@ class ApiServiceImpl {
     const settings = await Database.getSettings();
     const currentDateStr = getLocalDateStr();
     const currentTimeStr = getLocalTimeStr();
-    const proxyUrl = (settings.aiProxyUrl || '').trim();
 
-    if (settings.simulate503 || !proxyUrl) {
-      const reason = settings.simulate503 ? 'simulate503=true' : 'aiProxyUrl unconfigured';
-      this._log('callGeminiBookkeeper', 'Fallback', `Reason:${reason}`);
+    if (settings.simulate503) {
+      this._log('callGeminiBookkeeper', 'Fallback', `Reason:simulate503=true, IsAudio:${isAudio}`);
       await mockDelay(120);
+      if (isAudio) {
+        return {
+          reply: '語音記帳需要設定 Gemini API Key，請先至「設定 → 進階 AI 設定」填入您的 API Key。',
+          parsedTransactions: [],
+          isFallback: true,
+          fallbackReason: '語音記帳需要 Gemini API Key',
+        };
+      }
       return fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr);
     }
 
-    const endpoint = proxyUrl.endsWith('/api/bookkeep')
-      ? proxyUrl
-      : `${proxyUrl.replace(/\/+$/, '')}/api/bookkeep`;
-
-    try {
-      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-      const timer = controller ? setTimeout(() => controller.abort(), 12000) : null;
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller?.signal,
-        body: JSON.stringify({
-          userMessage,
-          imageBase64: imageBase64 ?? null,
-          mimeType: mimeType ?? null,
-          settings: {
-            accounts: settings.accounts,
-            categories: settings.categories,
-          },
-          currentDateStr,
-          currentTimeStr,
-          modelsCascade: MODELS_CASCADE,
-        }),
-      });
-      if (timer) clearTimeout(timer);
-
-      if (response.status === 429 || response.status === 503 || !response.ok) {
-        this._log(
-          'callGeminiBookkeeper',
-          'ProxyFallback',
-          `HTTP ${response.status} -> invoking fallbackParseTransaction`,
-        );
-        return fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr);
-      }
-
-      const json = (await response.json()) as {
-        reply?: string;
-        parsedTransactions?: AIParsedDraft[];
-        transactions?: AIParsedDraft[];
-        modelUsed?: string;
-        isFallback?: boolean;
-        fallbackRequired?: boolean;
-      };
-
-      if (json.fallbackRequired) {
-        this._log('callGeminiBookkeeper', 'ProxyFallbackRequired', 'Server requested fallback');
-        return fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr);
-      }
-
-      const drafts = json.parsedTransactions ?? json.transactions ?? [];
-      this._log(
-        'callGeminiBookkeeper',
-        'Response',
-        `Proxy Model:${json.modelUsed ?? MODELS_CASCADE[0]}, Drafts:${drafts.length}`,
+    const userApiKey = await loadUserGeminiApiKey();
+    if (userApiKey) {
+      this._log('callGeminiBookkeeper', 'DirectBYOK', 'Using user-provided Gemini API key');
+      return callGeminiDirectWithKey(
+        userApiKey,
+        userMessage,
+        mediaBase64,
+        mimeType,
+        settings,
+        currentDateStr,
+        currentTimeStr,
+        MODELS_CASCADE,
       );
+    }
 
+    this._log('callGeminiBookkeeper', 'Fallback', `Reason:User Gemini Key unconfigured, IsAudio:${isAudio}`);
+    await mockDelay(120);
+    if (isAudio) {
       return {
-        reply: json.reply || '解析成功！請核對以下記帳明細：',
-        parsedTransactions: drafts,
-        modelUsed: json.modelUsed || MODELS_CASCADE[0],
-        isFallback: Boolean(json.isFallback),
+        reply: '語音記帳需要設定 Gemini API Key，請先至「設定 → 進階 AI 設定」填入您的 API Key。',
+        parsedTransactions: [],
+        isFallback: true,
+        fallbackReason: '語音記帳需要 Gemini API Key',
       };
-    } catch (err) {
-      this._log(
-        'callGeminiBookkeeper',
-        'NetworkFallback',
-        `Error:${err instanceof Error ? err.message : 'unknown'} -> fallbackParseTransaction`,
-      );
-      return fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr);
     }
+    return fallbackParseTransaction(userMessage, settings, currentDateStr, currentTimeStr);
   }
 
   async resetSeedData(): Promise<ApiActionResult> {

@@ -15,6 +15,8 @@ export type GeminiModel = (typeof MODELS_CASCADE)[number];
 export interface Env {
   GEMINI_API_KEY?: string;
   ALLOWED_ORIGIN?: string;
+  GOOGLE_CLIENT_ID?: string;
+  ALLOWED_EMAILS?: string;
   PORT?: string;
 }
 
@@ -89,7 +91,7 @@ function buildCorsHeaders(allowedOrigin = '*'): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Google-Id-Token, X-Requested-With',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -428,12 +430,189 @@ async function callModelCascade(
   };
 }
 
+interface GoogleTokenInfo {
+  aud?: string;
+  azp?: string;
+  email?: string;
+  email_verified?: string | boolean;
+  exp?: string;
+  iss?: string;
+  sub?: string;
+  error_description?: string;
+}
+
+type TokenVerifyResult =
+  | { ok: true; email?: string; sub?: string }
+  | { ok: false; status: 401 | 403 | 503; code: string; error: string };
+
+const GOOGLE_TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
+const TOKEN_VERIFY_TIMEOUT_MS = 5000;
+
+/** Extract Bearer token from Authorization header or fallback X-Google-Id-Token header. */
+function extractGoogleIdToken(request: Request): string {
+  const authHeader = request.headers.get('Authorization')?.trim() ?? '';
+  if (authHeader.toLowerCase().startsWith('bearer ')) {
+    return authHeader.slice(7).trim();
+  }
+  return request.headers.get('X-Google-Id-Token')?.trim() ?? '';
+}
+
+/** Verify Google ID Token via Google tokeninfo endpoint and enforce optional aud/email allowlists. */
+async function verifyGoogleToken(
+  request: Request,
+  env: Env
+): Promise<TokenVerifyResult> {
+  const token = extractGoogleIdToken(request);
+  if (!token) {
+    console.warn('[AIProxy/verifyGoogleToken] MissingToken - No Bearer token in Authorization header');
+    return {
+      ok: false,
+      status: 401,
+      code: 'MISSING_TOKEN',
+      error: 'Missing Authorization Bearer Google ID token',
+    };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TOKEN_VERIFY_TIMEOUT_MS);
+
+  let tokenInfo: GoogleTokenInfo;
+  try {
+    const res = await fetch(GOOGLE_TOKENINFO_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `id_token=${encodeURIComponent(token)}`,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.warn(
+        `[AIProxy/verifyGoogleToken] Rejected - tokeninfo HTTP ${res.status}: ${errText.slice(0, 120)}`
+      );
+      return {
+        ok: false,
+        status: res.status >= 500 ? 503 : 401,
+        code: res.status >= 500 ? 'AUTH_UPSTREAM_ERROR' : 'INVALID_TOKEN',
+        error:
+          res.status >= 500
+            ? 'Google token verification service temporarily unavailable'
+            : 'Invalid or expired Google ID token',
+      };
+    }
+
+    tokenInfo = (await res.json()) as GoogleTokenInfo;
+  } catch (err) {
+    clearTimeout(timer);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[AIProxy/verifyGoogleToken] NetworkError - ${msg}`);
+    return {
+      ok: false,
+      status: 503,
+      code: 'AUTH_UPSTREAM_ERROR',
+      error: 'Failed to reach Google token verification service',
+    };
+  }
+
+  if (tokenInfo.exp) {
+    const expMs = Number(tokenInfo.exp) * 1000;
+    if (Number.isFinite(expMs) && expMs <= Date.now()) {
+      console.warn('[AIProxy/verifyGoogleToken] Expired - Token exp timestamp is in the past');
+      return {
+        ok: false,
+        status: 401,
+        code: 'TOKEN_EXPIRED',
+        error: 'Google ID token has expired',
+      };
+    }
+  }
+
+  const email = tokenInfo.email?.trim().toLowerCase() ?? '';
+  const emailVerified =
+    tokenInfo.email_verified === true || tokenInfo.email_verified === 'true';
+  if (!email || !emailVerified) {
+    console.warn(
+      `[AIProxy/verifyGoogleToken] UnverifiedEmail - email="${email || 'none'}", verified=${emailVerified}`
+    );
+    return {
+      ok: false,
+      status: 403,
+      code: 'EMAIL_NOT_VERIFIED',
+      error: 'Google account email must be verified',
+    };
+  }
+
+  const configuredClientIds = (env.GOOGLE_CLIENT_ID ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (configuredClientIds.length > 0) {
+    const aud = tokenInfo.aud?.trim() ?? '';
+    if (!aud || !configuredClientIds.includes(aud)) {
+      console.warn(
+        `[AIProxy/verifyGoogleToken] AudienceMismatch - aud="${aud}" not in configured GOOGLE_CLIENT_ID`
+      );
+      return {
+        ok: false,
+        status: 403,
+        code: 'INVALID_AUDIENCE',
+        error: 'Google ID token audience is not authorized for this proxy',
+      };
+    }
+  }
+
+  const allowedEmails = (env.ALLOWED_EMAILS ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (allowedEmails.length > 0) {
+    const email = tokenInfo.email?.trim().toLowerCase() ?? '';
+    const emailVerified =
+      tokenInfo.email_verified === true || tokenInfo.email_verified === 'true';
+    if (!email || !emailVerified || !allowedEmails.includes(email)) {
+      console.warn(
+        `[AIProxy/verifyGoogleToken] EmailForbidden - email="${email || 'none'}", verified=${emailVerified}`
+      );
+      return {
+        ok: false,
+        status: 403,
+        code: 'EMAIL_NOT_ALLOWED',
+        error: 'Google account is not authorized to access this proxy',
+      };
+    }
+  }
+
+  console.log(
+    `[AIProxy/verifyGoogleToken] Verified - sub=${tokenInfo.sub ?? 'unknown'}, email=${tokenInfo.email ?? 'unknown'}`
+  );
+  return {
+    ok: true,
+    email: tokenInfo.email,
+    sub: tokenInfo.sub,
+  };
+}
+
 /** Handle POST /api/bookkeep requests. */
 async function handleBookkeep(
   request: Request,
   env: Env,
   allowedOrigin: string
 ): Promise<Response> {
+  const authResult = await verifyGoogleToken(request, env);
+  if (!authResult.ok) {
+    return jsonResponse(
+      {
+        error: authResult.error,
+        code: authResult.code,
+      },
+      authResult.status,
+      allowedOrigin
+    );
+  }
+
   let body: BookkeepRequestBody;
   try {
     body = (await request.json()) as BookkeepRequestBody;
@@ -455,6 +634,17 @@ async function handleBookkeep(
     return jsonResponse(
       { error: 'Either userMessage or imageBase64 must be provided' },
       400,
+      allowedOrigin
+    );
+  }
+
+  if (userMessage.length > 4000 || imageBase64.length > 6_000_000) {
+    console.warn(
+      `[AIProxy/handleBookkeep] PayloadTooLarge - textLen=${userMessage.length}, imgLen=${imageBase64.length}`
+    );
+    return jsonResponse(
+      { error: 'Request payload exceeds maximum allowed size' },
+      413,
       allowedOrigin
     );
   }
@@ -595,7 +785,9 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
   if (method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
-      headers: buildCorsHeaders(allowedOrigin),
+      headers: {
+        ...buildCorsHeaders(allowedOrigin),
+      },
     });
   }
 
@@ -697,6 +889,8 @@ async function startLocalNodeServer(): Promise<void> {
       const env: Env = {
         GEMINI_API_KEY: process.env.GEMINI_API_KEY,
         ALLOWED_ORIGIN: process.env.ALLOWED_ORIGIN,
+        GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+        ALLOWED_EMAILS: process.env.ALLOWED_EMAILS,
         PORT: process.env.PORT,
       };
       const webRes = await handleRequest(webReq, env);

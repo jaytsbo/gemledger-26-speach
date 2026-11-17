@@ -6,6 +6,7 @@ import { fallbackParseTransaction } from '../src/services/fallbackParser';
 import { Transaction } from '../src/types/ledger';
 import { computeCategoryStats, computeKPIStats } from '../src/utils/analytics';
 import { convertCurrency, DEFAULT_EXCHANGE_RATES, formatMoney } from '../src/utils/currency';
+import { decodeCsvBytes, extractSpreadsheetId, parseCsvTransactions } from '../src/utils/csvImport';
 
 function installMockLocalStorage() {
   const store = new Map<string, string>();
@@ -257,5 +258,221 @@ describe('ApiService & Cascade Deletion', () => {
     assert.equal(res.parsedTransactions[0].amount, -180);
     assert.equal(res.parsedTransactions[0].category, '食');
     assert.equal(res.parsedTransactions[0].account, '現金');
+  });
+});
+
+describe('CSV Import & Spreadsheet ID', () => {
+  it('parseCsvTransactions handles UTF-8 BOM, quoted commas, escaped quotes, and Chinese headers', () => {
+    const csv =
+      '\uFEFF日期,時間,帳戶,項目名稱,分類,幣別,金額,備註\r\n' +
+      '2026/11/16,12:30,永豐銀行,"午餐, ""豚骨拉麵""",食,TWD,-280,"好吃, 下次再來"\r\n' +
+      '2026-11-16,09:05,現金,咖啡,食,USD,-4.50,\r\n';
+
+    const drafts = parseCsvTransactions(csv);
+    assert.equal(drafts.length, 2);
+
+    assert.equal(drafts[0].date, '2026-11-16');
+    assert.equal(drafts[0].time, '12:30');
+    assert.equal(drafts[0].account, '永豐銀行');
+    assert.equal(drafts[0].name, '午餐, "豚骨拉麵"');
+    assert.equal(drafts[0].category, '食');
+    assert.equal(drafts[0].currency, 'TWD');
+    assert.equal(drafts[0].amount, -280);
+    assert.equal(drafts[0].note, '好吃, 下次再來');
+
+    assert.equal(drafts[1].currency, 'USD');
+    assert.equal(drafts[1].amount, -4.5);
+  });
+
+  it('parseCsvTransactions finds headers below leading title rows and resolves Chinese aliases', () => {
+    const csv =
+      '我的 2026 記帳本\n' +
+      '交易日期,付款方式,消費項目,消費分類,花費\n' +
+      '2026-11-16,悠遊卡,捷運通勤,行,-35\n';
+
+    const drafts = parseCsvTransactions(csv);
+    assert.equal(drafts.length, 1);
+    assert.equal(drafts[0].account, '悠遊卡');
+    assert.equal(drafts[0].name, '捷運通勤');
+    assert.equal(drafts[0].category, '行');
+    assert.equal(drafts[0].amount, -35);
+  });
+
+  it('decodeCsvBytes decodes Big5-encoded bytes without garbled replacement characters', () => {
+    // Big5 bytes for "日期,項目名稱,金額\n" -> 日(A4E9) 期(B4C1) , 項目名稱 , 金額
+    const big5Bytes = new Uint8Array([
+      0xa4, 0xe9, 0xb4, 0xc1, 0x2c, // 日期,
+      0xb6, 0xb5, 0xa5, 0xd8, 0xa6, 0x57, 0xba, 0xd9, 0x2c, // 項目名稱,
+      0xaa, 0xf7, 0xc3, 0x42, // 金額
+    ]);
+    const decoded = decodeCsvBytes(big5Bytes);
+    assert.equal(decoded, '日期,項目名稱,金額');
+  });
+
+  it('extractSpreadsheetId parses full Google Sheets URLs, raw IDs, and rejects invalid inputs', () => {
+    assert.equal(
+      extractSpreadsheetId(
+        'https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit#gid=0',
+      ),
+      '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms',
+    );
+    assert.equal(
+      extractSpreadsheetId('  1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms  '),
+      '1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms',
+    );
+    assert.equal(extractSpreadsheetId(''), null);
+    assert.equal(extractSpreadsheetId('https://example.com/not-a-sheet'), null);
+    assert.equal(extractSpreadsheetId('short'), null);
+  });
+});
+
+describe('Account/Category Rename, Merge & Import', () => {
+  let storage: ReturnType<typeof installMockLocalStorage>;
+
+  beforeEach(() => {
+    storage = installMockLocalStorage();
+    storage.clear();
+    ApiService.clearCache();
+  });
+
+  it('renameAccount cascades account, toAccount, accountIcons and rejects duplicates', async () => {
+    await ApiService.getSheetData(true);
+    await ApiService.saveCustomSettings({
+      accountIcons: { 永豐銀行: 'bank-outline', 現金: 'cash' },
+    });
+
+    const rawTxs = JSON.parse(storage.getItem(MOCK_STORAGE_KEYS.SHEET_DATA) || '[]');
+    rawTxs.push({
+      id: 999,
+      rowNumber: 99,
+      date: '2026-11-16',
+      time: '10:00',
+      account: '現金',
+      toAccount: '永豐銀行',
+      name: '轉帳測試',
+      category: '內部轉帳',
+      currency: 'TWD',
+      amount: -1000,
+      note: '',
+    });
+    storage.setItem(MOCK_STORAGE_KEYS.SHEET_DATA, JSON.stringify(rawTxs));
+
+    const expectedCount = rawTxs.filter(
+      (t: any) => t.account === '永豐銀行' || t.toAccount === '永豐銀行',
+    ).length;
+
+    const res = await ApiService.renameAccount('永豐銀行', '永豐大戶');
+    assert.equal(res.success, true);
+    assert.equal(res.count, expectedCount);
+
+    const settings = await ApiService.getCustomSettings();
+    assert.equal(settings.accounts.includes('永豐銀行'), false);
+    assert.equal(settings.accounts.includes('永豐大戶'), true);
+    assert.equal(settings.accountIcons?.['永豐大戶'], 'bank-outline');
+    assert.equal(settings.accountIcons?.['永豐銀行'], undefined);
+
+    const txs = (await ApiService.getSheetData(true)) as Array<Transaction & { toAccount?: string }>;
+    assert.equal(txs.some((t) => t.account === '永豐銀行' || t.toAccount === '永豐銀行'), false);
+    const transferTx = txs.find((t) => t.id === 999);
+    assert.equal(transferTx?.toAccount, '永豐大戶');
+
+    await assert.rejects(() => ApiService.renameAccount('永豐大戶', '現金'), /已存在/);
+  });
+
+  it('renameCategory cascades transactions and rejects duplicates', async () => {
+    const initialTx = await ApiService.getSheetData(true);
+    const expectedCount = initialTx.filter((t) => t.category === '食').length;
+    assert.ok(expectedCount > 0);
+
+    const res = await ApiService.renameCategory('食', '餐飲');
+    assert.equal(res.success, true);
+    assert.equal(res.count, expectedCount);
+
+    const settings = await ApiService.getCustomSettings();
+    assert.equal(settings.categories.includes('食'), false);
+    assert.equal(settings.categories.includes('餐飲'), true);
+
+    const txs = await ApiService.getSheetData(true);
+    assert.equal(txs.some((t) => t.category === '食'), false);
+    assert.equal(txs.filter((t) => t.category === '餐飲').length, expectedCount);
+
+    await assert.rejects(() => ApiService.renameCategory('餐飲', '行'), /已存在/);
+  });
+
+  it('mergeCategories moves transactions to target and removes source category', async () => {
+    const initialTx = await ApiService.getSheetData(true);
+    const sourceCount = initialTx.filter((t) => t.category === '食').length;
+    const targetCount = initialTx.filter((t) => t.category === '行').length;
+    assert.ok(sourceCount > 0);
+
+    const res = await ApiService.mergeCategories('食', '行');
+    assert.equal(res.success, true);
+    assert.equal(res.count, sourceCount);
+
+    const settings = await ApiService.getCustomSettings();
+    assert.equal(settings.categories.includes('食'), false);
+    assert.equal(settings.categories.includes('行'), true);
+
+    const txs = await ApiService.getSheetData(true);
+    assert.equal(txs.some((t) => t.category === '食'), false);
+    assert.equal(txs.filter((t) => t.category === '行').length, sourceCount + targetCount);
+  });
+
+  it('importTransactions supports append vs overwrite and auto-adds new accounts and categories', async () => {
+    const initialTx = await ApiService.getSheetData(true);
+    const initialCount = initialTx.length;
+
+    const appendRes = await ApiService.importTransactions(
+      [
+        {
+          date: '2026-11-16',
+          time: '14:00',
+          account: '新數位帳戶',
+          name: '雲端訂閱',
+          category: '數位服務',
+          currency: 'TWD',
+          amount: -390,
+          note: 'append test',
+        },
+      ],
+      'append',
+    );
+    assert.equal(appendRes.success, true);
+    assert.equal(appendRes.count, 1);
+
+    const afterAppendTx = await ApiService.getSheetData(true);
+    assert.equal(afterAppendTx.length, initialCount + 1);
+    const afterAppendSettings = await ApiService.getCustomSettings();
+    assert.ok(afterAppendSettings.accounts.includes('新數位帳戶'));
+    assert.ok(afterAppendSettings.categories.includes('數位服務'));
+
+    const overwriteRes = await ApiService.importTransactions(
+      [
+        {
+          date: '2026-11-16',
+          time: '18:00',
+          account: '覆寫專用卡',
+          name: '全新帳本第一筆',
+          category: '全新分類',
+          currency: 'JPY',
+          amount: -1200,
+          note: 'overwrite test',
+        },
+      ],
+      'overwrite',
+    );
+    assert.equal(overwriteRes.success, true);
+    assert.equal(overwriteRes.count, 1);
+
+    const afterOverwriteTx = await ApiService.getSheetData(true);
+    assert.equal(afterOverwriteTx.length, 1);
+    assert.equal(afterOverwriteTx[0].name, '全新帳本第一筆');
+    assert.equal(afterOverwriteTx[0].account, '覆寫專用卡');
+    assert.equal(afterOverwriteTx[0].category, '全新分類');
+
+    const afterOverwriteSettings = await ApiService.getCustomSettings();
+    assert.deepEqual(afterOverwriteSettings.accounts, ['覆寫專用卡']);
+    assert.deepEqual(afterOverwriteSettings.categories, ['全新分類']);
+    assert.equal(afterOverwriteSettings.baseCurrency, 'TWD');
   });
 });

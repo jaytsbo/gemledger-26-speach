@@ -4,10 +4,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   AlertTriangle,
   Camera,
+  Check,
   CheckCheck,
   CheckCircle2,
   Image as ImageIcon,
   Layers,
+  Mic,
   Send,
   Sparkles,
   X,
@@ -17,7 +19,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -34,6 +38,12 @@ import {
   CalculatorKeypad,
   evaluateArithmeticExpression,
 } from '../src/components/CalculatorKeypad';
+import { ApiService } from '../src/services/apiService';
+import {
+  cancelRecording,
+  startRecording,
+  stopRecording,
+} from '../src/services/voiceRecorder';
 import { useLedgerStore } from '../src/store/useLedgerStore';
 import { getAccountMeta, getCategoryMeta } from '../src/theme/colors';
 import { useAppTheme } from '../src/theme/ThemeContext';
@@ -63,11 +73,21 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
   imageUri?: string;
+  audioDurationSec?: number;
   drafts?: AIParsedDraft[];
   savedIndices?: number[];
   isFallback?: boolean;
   fallbackReason?: string;
   modelUsed?: string;
+}
+
+const MAX_VOICE_SECONDS = 60;
+
+function formatDuration(totalSec: number): string {
+  const safeSec = Math.max(0, Math.floor(totalSec));
+  const mins = Math.floor(safeSec / 60);
+  const secs = safeSec % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
 const QUICK_AI_PROMPTS = [
@@ -148,6 +168,9 @@ export default function QuickAddModalScreen() {
   const [aiInput, setAiInput] = useState('');
   const [attachedImage, setAttachedImage] = useState<AttachedImage | null>(null);
   const [isAnalyzingAI, setIsAnalyzingAI] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isStartingRecording, setIsStartingRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [submittingDraftKeys, setSubmittingDraftKeys] = useState<Record<string, boolean>>({});
   const [batchSubmittingMsgId, setBatchSubmittingMsgId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -158,7 +181,75 @@ export default function QuickAddModalScreen() {
     },
   ]);
 
+  const isRecordingRef = useRef(false);
+  const isStoppingVoiceRef = useRef(false);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const waveAnims = useRef([
+    new Animated.Value(0.4),
+    new Animated.Value(0.8),
+    new Animated.Value(0.5),
+    new Animated.Value(0.9),
+  ]).current;
+
   const chatScrollRef = useRef<ScrollView | null>(null);
+  const manualScrollRef = useRef<ScrollView | null>(null);
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isTextInputFocused, setIsTextInputFocused] = useState(false);
+  const [isSystemKeyboardOpen, setIsSystemKeyboardOpen] = useState(false);
+
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setIsSystemKeyboardOpen(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsSystemKeyboardOpen(false));
+
+    let cleanupVisualViewport: (() => void) | undefined;
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.visualViewport) {
+      const vv = window.visualViewport;
+      const baseHeight = window.innerHeight;
+      const onResize = () => {
+        const diff = baseHeight - vv.height;
+        setIsSystemKeyboardOpen(diff > 120);
+      };
+      vv.addEventListener('resize', onResize);
+      cleanupVisualViewport = () => vv.removeEventListener('resize', onResize);
+    }
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+      cleanupVisualViewport?.();
+      if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    };
+  }, []);
+
+  const handleManualInputFocus = useCallback(() => {
+    if (blurTimerRef.current) {
+      clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = null;
+    }
+    setIsTextInputFocused(true);
+    setTimeout(() => {
+      manualScrollRef.current?.scrollToEnd({ animated: true });
+    }, 120);
+  }, []);
+
+  const handleManualInputBlur = useCallback(() => {
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    blurTimerRef.current = setTimeout(() => {
+      setIsTextInputFocused(false);
+    }, 80);
+  }, []);
+
+  const handleDismissKeyboard = useCallback(() => {
+    Keyboard.dismiss();
+    setIsTextInputFocused(false);
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const active = document.activeElement as HTMLElement | null;
+      active?.blur?.();
+    }
+  }, []);
+
+  const hideCalculatorKeypad = isTextInputFocused || isSystemKeyboardOpen;
 
   useEffect(() => {
     if (!initialized) {
@@ -405,6 +496,193 @@ export default function QuickAddModalScreen() {
     }
   };
 
+  const clearRecordingTimer = useCallback(() => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  }, []);
+
+  const showVoiceAlert = useCallback((title: string, message: string) => {
+    setErrorBanner(message);
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert(`${title}\n${message}`);
+    } else {
+      Alert.alert(title, message);
+    }
+  }, []);
+
+  const handleFinishVoice = useCallback(async () => {
+    if (!isRecordingRef.current || isStoppingVoiceRef.current) return;
+    isStoppingVoiceRef.current = true;
+    clearRecordingTimer();
+    isRecordingRef.current = false;
+    setIsRecording(false);
+
+    try {
+      const { base64, mimeType, durationSec } = await stopRecording();
+      console.log(
+        `[QuickAdd/handleFinishVoice] Captured - DurationSec:${durationSec}, MimeType:${mimeType}, Base64Len:${base64.length}`,
+      );
+
+      const userBubble: ChatMessage = {
+        id: `user-voice-${Date.now()}`,
+        role: 'user',
+        text: `🎤 語音記帳 (${formatDuration(durationSec)})`,
+        audioDurationSec: durationSec,
+      };
+
+      setMessages((prev) => [...prev, userBubble]);
+      setIsAnalyzingAI(true);
+      triggerHapticLight();
+      scrollToChatBottom();
+
+      const res = await callAI('', base64, mimeType);
+      const assistantMsg: ChatMessage = {
+        id: `ai-${Date.now()}`,
+        role: 'assistant',
+        text: res.reply || '已為您解析以下明細：',
+        drafts: res.parsedTransactions || [],
+        savedIndices: [],
+        isFallback: res.isFallback,
+        fallbackReason: res.fallbackReason,
+        modelUsed: res.modelUsed,
+      };
+
+      console.log(
+        `[QuickAdd/handleFinishVoice] Response - Drafts:${assistantMsg.drafts?.length ?? 0}, Fallback:${Boolean(res.isFallback)}, Model:${res.modelUsed ?? 'none'}`,
+      );
+      setMessages((prev) => [...prev, assistantMsg]);
+      scrollToChatBottom();
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : '語音記帳解析失敗';
+      console.warn('[QuickAdd/handleFinishVoice] Error -', errMsg);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `err-voice-${Date.now()}`,
+          role: 'assistant',
+          text: `語音解析失敗：${errMsg}。請稍後重試或改用「極速記帳」。`,
+        },
+      ]);
+      scrollToChatBottom();
+    } finally {
+      isStoppingVoiceRef.current = false;
+      setIsAnalyzingAI(false);
+      setRecordingSeconds(0);
+    }
+  }, [callAI, clearRecordingTimer]);
+
+  const handleStartVoice = useCallback(async () => {
+    if (isAnalyzingAI || isRecordingRef.current || isStartingRecording) return;
+    setErrorBanner(null);
+    setIsStartingRecording(true);
+
+    try {
+      const hasKey = await ApiService.hasGeminiApiKey();
+      if (!hasKey) {
+        console.log('[QuickAdd/handleStartVoice] Blocked - Missing Gemini API key');
+        showVoiceAlert(
+          '需要設定 Gemini API Key',
+          '語音記帳需要設定 Gemini API Key，請先至「設定 → 進階 AI 設定」填入您的 API Key。',
+        );
+        return;
+      }
+
+      await startRecording();
+      isRecordingRef.current = true;
+      isStoppingVoiceRef.current = false;
+      setIsRecording(true);
+      setRecordingSeconds(0);
+      triggerHapticLight();
+
+      clearRecordingTimer();
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+      console.log('[QuickAdd/handleStartVoice] Recording started');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '無法啟動麥克風錄音';
+      console.warn('[QuickAdd/handleStartVoice] Error -', msg);
+      showVoiceAlert('無法開始錄音', msg);
+    } finally {
+      setIsStartingRecording(false);
+    }
+  }, [clearRecordingTimer, isAnalyzingAI, isStartingRecording, showVoiceAlert]);
+
+  const handleCancelVoice = useCallback(async () => {
+    clearRecordingTimer();
+    isRecordingRef.current = false;
+    isStoppingVoiceRef.current = false;
+    setIsRecording(false);
+    setRecordingSeconds(0);
+    await cancelRecording().catch(() => {});
+    console.log('[QuickAdd/handleCancelVoice] Recording cancelled');
+  }, [clearRecordingTimer]);
+
+  useEffect(() => {
+    if (isRecording && recordingSeconds >= MAX_VOICE_SECONDS && !isStoppingVoiceRef.current) {
+      console.log('[QuickAdd/voiceTimer] AutoStop - Reached 60s limit');
+      handleFinishVoice();
+    }
+  }, [handleFinishVoice, isRecording, recordingSeconds]);
+
+  useEffect(() => {
+    if (!isRecording) {
+      pulseAnim.setValue(1);
+      waveAnims.forEach((anim, idx) => anim.setValue(idx % 2 === 0 ? 0.45 : 0.8));
+      return;
+    }
+
+    const useNative = Platform.OS !== 'web';
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 0.25, duration: 550, useNativeDriver: useNative }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 550, useNativeDriver: useNative }),
+      ]),
+    );
+    const waveLoops = waveAnims.map((anim, idx) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 260 + idx * 70,
+            useNativeDriver: useNative,
+          }),
+          Animated.timing(anim, {
+            toValue: 0.28,
+            duration: 260 + idx * 70,
+            useNativeDriver: useNative,
+          }),
+        ]),
+      ),
+    );
+
+    pulseLoop.start();
+    waveLoops.forEach((loop) => loop.start());
+
+    return () => {
+      pulseLoop.stop();
+      waveLoops.forEach((loop) => loop.stop());
+    };
+  }, [isRecording, pulseAnim, waveAnims]);
+
+  useEffect(() => {
+    if (activeMode !== 'ai' && isRecordingRef.current) {
+      handleCancelVoice();
+    }
+  }, [activeMode, handleCancelVoice]);
+
+  useEffect(() => {
+    return () => {
+      clearRecordingTimer();
+      if (isRecordingRef.current) {
+        isRecordingRef.current = false;
+        cancelRecording().catch(() => {});
+      }
+    };
+  }, [clearRecordingTimer]);
+
   const handleUpdateDraft = (msgId: string, draftIdx: number, updated: AIParsedDraft) => {
     setMessages((prev) =>
       prev.map((msg) => {
@@ -591,6 +869,7 @@ export default function QuickAddModalScreen() {
         {activeMode === 'manual' ? (
           <View style={styles.flex1}>
             <ScrollView
+              ref={manualScrollRef}
               style={styles.flex1}
               contentContainerStyle={styles.manualContent}
               keyboardShouldPersistTaps="handled"
@@ -835,6 +1114,8 @@ export default function QuickAddModalScreen() {
                     <TextInput
                       value={itemName}
                       onChangeText={setItemName}
+                      onFocus={handleManualInputFocus}
+                      onBlur={handleManualInputBlur}
                       placeholder={`例如：${category}消費`}
                       placeholderTextColor={colors.textMuted}
                       style={[
@@ -848,6 +1129,8 @@ export default function QuickAddModalScreen() {
                     <TextInput
                       value={note}
                       onChangeText={setNote}
+                      onFocus={handleManualInputFocus}
+                      onBlur={handleManualInputBlur}
                       placeholder="選填備註..."
                       placeholderTextColor={colors.textMuted}
                       style={[
@@ -864,6 +1147,8 @@ export default function QuickAddModalScreen() {
                     <TextInput
                       value={date}
                       onChangeText={setDate}
+                      onFocus={handleManualInputFocus}
+                      onBlur={handleManualInputBlur}
                       placeholder="YYYY-MM-DD"
                       placeholderTextColor={colors.textMuted}
                       style={[
@@ -878,6 +1163,8 @@ export default function QuickAddModalScreen() {
                     <TextInput
                       value={time}
                       onChangeText={setTime}
+                      onFocus={handleManualInputFocus}
+                      onBlur={handleManualInputBlur}
                       placeholder="HH:mm"
                       placeholderTextColor={colors.textMuted}
                       style={[
@@ -923,15 +1210,45 @@ export default function QuickAddModalScreen() {
               </View>
             </ScrollView>
 
-            {/* Bottom Docked Submit + Calculator Keypad */}
+            {/* Bottom Docked Submit + Calculator Keypad (auto-hides keypad when typing) */}
             <View style={{ backgroundColor: colors.surface }}>
-              <View style={[styles.submitBar, { borderTopColor: colors.border }]}>
+              <View
+                style={[
+                  styles.submitBar,
+                  {
+                    borderTopColor: colors.border,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                  },
+                ]}
+              >
+                {hideCalculatorKeypad ? (
+                  <Pressable
+                    onPress={handleDismissKeyboard}
+                    style={[
+                      styles.nowBtn,
+                      {
+                        height: 48,
+                        paddingHorizontal: 12,
+                        justifyContent: 'center',
+                        backgroundColor: colors.chipBg,
+                        borderColor: colors.border,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.nowBtnText, { color: colors.textSecondary }]}>
+                      計算機
+                    </Text>
+                  </Pressable>
+                ) : null}
                 <Pressable
                   disabled={isSubmittingManual}
                   onPress={handleSaveManual}
                   style={({ pressed }) => [
                     styles.submitBtn,
                     {
+                      flex: 1,
                       backgroundColor: isExpense ? colors.expense : colors.income,
                       opacity: isSubmittingManual ? 0.65 : pressed ? 0.88 : 1,
                     },
@@ -951,12 +1268,14 @@ export default function QuickAddModalScreen() {
                 </Pressable>
               </View>
 
-              <CalculatorKeypad
-                expression={expression}
-                onExpressionChange={handleExpressionChange}
-                accentColor={isExpense ? colors.expense : colors.income}
-                disabled={isSubmittingManual}
-              />
+              {!hideCalculatorKeypad ? (
+                <CalculatorKeypad
+                  expression={expression}
+                  onExpressionChange={handleExpressionChange}
+                  accentColor={isExpense ? colors.expense : colors.income}
+                  disabled={isSubmittingManual}
+                />
+              ) : null}
             </View>
           </View>
         ) : (
@@ -996,12 +1315,23 @@ export default function QuickAddModalScreen() {
               contentContainerStyle={styles.chatContent}
               keyboardShouldPersistTaps="handled"
             >
+              {errorBanner ? (
+                <View style={[styles.banner, { backgroundColor: colors.expenseBg, borderColor: colors.expense }]}>
+                  <AlertTriangle size={16} color={colors.expense} />
+                  <Text style={[styles.bannerText, { color: colors.expense }]}>{errorBanner}</Text>
+                </View>
+              ) : null}
+
               {messages.map((msg) => {
                 const isUser = msg.role === 'user';
                 const savedIndices = msg.savedIndices || [];
                 const drafts = msg.drafts || [];
                 const unsavedCount = drafts.filter((_, idx) => !savedIndices.includes(idx)).length;
                 const isBatchSubmitting = batchSubmittingMsgId === msg.id;
+                const displayText =
+                  msg.audioDurationSec !== undefined
+                    ? `🎤 語音記帳 (${formatDuration(msg.audioDurationSec)})`
+                    : msg.text;
 
                 return (
                   <View
@@ -1024,7 +1354,7 @@ export default function QuickAddModalScreen() {
                         <Image source={{ uri: msg.imageUri }} style={styles.chatImage} />
                       ) : null}
                       <Text style={[styles.bubbleText, { color: isUser ? '#FFFFFF' : colors.text }]}>
-                        {msg.text}
+                        {displayText}
                       </Text>
                     </View>
 
@@ -1118,74 +1448,147 @@ export default function QuickAddModalScreen() {
               </View>
             ) : null}
 
-            {/* AI Composer Input Bar */}
-            <View style={[styles.composerBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
-              <Pressable
-                disabled={isAnalyzingAI}
-                onPress={() => handlePickImage('camera')}
-                accessibilityLabel="拍攝收據"
-                style={({ pressed }) => [
-                  styles.mediaBtn,
-                  { backgroundColor: colors.chipBg, opacity: pressed ? 0.7 : 1 },
-                ]}
-              >
-                <Camera size={18} color={colors.textSecondary} />
-              </Pressable>
+            {/* AI Composer Input Bar / Active Voice Recording Bar */}
+            {isRecording ? (
+              <View style={[styles.composerBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+                <Pressable
+                  onPress={handleCancelVoice}
+                  accessibilityLabel="取消錄音"
+                  style={({ pressed }) => [
+                    styles.voiceCancelBtn,
+                    { backgroundColor: colors.chipBg, opacity: pressed ? 0.7 : 1 },
+                  ]}
+                >
+                  <X size={18} color={colors.textSecondary} />
+                </Pressable>
 
-              <Pressable
-                disabled={isAnalyzingAI}
-                onPress={() => handlePickImage('library')}
-                accessibilityLabel="選擇相片"
-                style={({ pressed }) => [
-                  styles.mediaBtn,
-                  { backgroundColor: colors.chipBg, opacity: pressed ? 0.7 : 1 },
-                ]}
-              >
-                <ImageIcon size={18} color={colors.textSecondary} />
-              </Pressable>
+                <View
+                  style={[
+                    styles.recordingPill,
+                    { backgroundColor: colors.inputBg, borderColor: colors.border },
+                  ]}
+                >
+                  <Animated.View style={[styles.recordingDot, { opacity: pulseAnim }]} />
+                  <Text style={[styles.recordingLabel, { color: colors.text }]}>聆聽中...</Text>
 
-              <TextInput
-                value={aiInput}
-                onChangeText={setAiInput}
-                placeholder="輸入消費描述，如：東京拉麵 1080 JPY 現金"
-                placeholderTextColor={colors.textMuted}
-                multiline
-                maxLength={500}
-                onSubmitEditing={() => handleSendAI()}
-                style={[
-                  styles.aiTextInput,
-                  {
-                    backgroundColor: colors.inputBg,
-                    borderColor: colors.border,
-                    color: colors.text,
-                  },
-                ]}
-              />
+                  <View style={styles.waveformRow}>
+                    {waveAnims.map((anim, idx) => (
+                      <Animated.View
+                        key={`wave-${idx}`}
+                        style={[
+                          styles.waveBar,
+                          {
+                            backgroundColor: colors.primary,
+                            transform: [{ scaleY: anim }],
+                          },
+                        ]}
+                      />
+                    ))}
+                  </View>
 
-              <Pressable
-                disabled={isAnalyzingAI || (!aiInput.trim() && !attachedImage)}
-                onPress={() => handleSendAI()}
-                accessibilityLabel="送出 AI 解析"
-                style={({ pressed }) => [
-                  styles.sendBtn,
-                  {
-                    backgroundColor: colors.primary,
-                    opacity:
-                      isAnalyzingAI || (!aiInput.trim() && !attachedImage)
-                        ? 0.45
-                        : pressed
-                          ? 0.85
-                          : 1,
-                  },
-                ]}
-              >
-                {isAnalyzingAI ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <Text style={[styles.recordingTimer, { color: colors.textSecondary }]}>
+                    {formatDuration(recordingSeconds)}
+                  </Text>
+                </View>
+
+                <Pressable
+                  onPress={handleFinishVoice}
+                  accessibilityLabel="完成並送出語音"
+                  style={({ pressed }) => [
+                    styles.voiceSendBtn,
+                    { backgroundColor: colors.primary, opacity: pressed ? 0.85 : 1 },
+                  ]}
+                >
+                  <Check size={16} color="#FFFFFF" />
+                  <Text style={styles.voiceSendText}>送出</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={[styles.composerBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+                <Pressable
+                  disabled={isAnalyzingAI}
+                  onPress={() => handlePickImage('camera')}
+                  accessibilityLabel="拍攝收據"
+                  style={({ pressed }) => [
+                    styles.mediaBtn,
+                    { backgroundColor: colors.chipBg, opacity: pressed ? 0.7 : 1 },
+                  ]}
+                >
+                  <Camera size={18} color={colors.textSecondary} />
+                </Pressable>
+
+                <Pressable
+                  disabled={isAnalyzingAI}
+                  onPress={() => handlePickImage('library')}
+                  accessibilityLabel="選擇相片"
+                  style={({ pressed }) => [
+                    styles.mediaBtn,
+                    { backgroundColor: colors.chipBg, opacity: pressed ? 0.7 : 1 },
+                  ]}
+                >
+                  <ImageIcon size={18} color={colors.textSecondary} />
+                </Pressable>
+
+                <TextInput
+                  value={aiInput}
+                  onChangeText={setAiInput}
+                  placeholder="輸入消費描述，如：東京拉麵 1080 JPY 現金"
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                  maxLength={500}
+                  onSubmitEditing={() => handleSendAI()}
+                  style={[
+                    styles.aiTextInput,
+                    {
+                      backgroundColor: colors.inputBg,
+                      borderColor: colors.border,
+                      color: colors.text,
+                    },
+                  ]}
+                />
+
+                {aiInput.trim() === '' && !attachedImage ? (
+                  <Pressable
+                    disabled={isAnalyzingAI || isStartingRecording}
+                    onPress={handleStartVoice}
+                    accessibilityLabel="語音記帳"
+                    style={({ pressed }) => [
+                      styles.sendBtn,
+                      {
+                        backgroundColor: colors.primary,
+                        opacity:
+                          isAnalyzingAI || isStartingRecording ? 0.45 : pressed ? 0.85 : 1,
+                      },
+                    ]}
+                  >
+                    {isAnalyzingAI || isStartingRecording ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Mic size={18} color="#FFFFFF" />
+                    )}
+                  </Pressable>
                 ) : (
-                  <Send size={17} color="#FFFFFF" />
+                  <Pressable
+                    disabled={isAnalyzingAI}
+                    onPress={() => handleSendAI()}
+                    accessibilityLabel="送出 AI 解析"
+                    style={({ pressed }) => [
+                      styles.sendBtn,
+                      {
+                        backgroundColor: colors.primary,
+                        opacity: isAnalyzingAI ? 0.45 : pressed ? 0.85 : 1,
+                      },
+                    ]}
+                  >
+                    {isAnalyzingAI ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <Send size={17} color="#FFFFFF" />
+                    )}
+                  </Pressable>
                 )}
-              </Pressable>
-            </View>
+              </View>
+            )}
           </View>
         )}
       </KeyboardAvoidingView>
@@ -1575,8 +1978,68 @@ const styles = StyleSheet.create({
   sendBtn: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  voiceCancelBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recordingPill: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    gap: 8,
+  },
+  recordingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+  },
+  recordingLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  waveformRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    height: 20,
+  },
+  waveBar: {
+    width: 3,
+    height: 16,
+    borderRadius: 2,
+  },
+  recordingTimer: {
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontVariant: ['tabular-nums'],
+  },
+  voiceSendBtn: {
+    height: 40,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  voiceSendText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });
