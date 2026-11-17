@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -98,10 +98,23 @@ export default function HomeScreen() {
   const [pickerTimeTab, setPickerTimeTab] = useState<TimeMode>('recent');
   const [refreshing, setRefreshing] = useState(false);
 
+  useEffect(() => {
+    const isDefaultStoreFilters =
+      filters.year === 'ALL' &&
+      filters.month === 'ALL' &&
+      !filters.date &&
+      filters.account === 'ALL' &&
+      filters.category === 'ALL';
+    if (isDefaultStoreFilters && (timeMode !== 'recent' || selectedTimeValue !== 'RECENT')) {
+      console.log('[HomeScreen/filterSync] Reset - Restoring timeMode to recent due to default store filters');
+      setTimeMode('recent');
+      setSelectedTimeValue('RECENT');
+    }
+  }, [filters.year, filters.month, filters.date, filters.account, filters.category, timeMode, selectedTimeValue]);
+
   const displayTransactions = useMemo(() => {
     const hasSearch = Boolean(filters.searchQuery.trim());
-    const hasAccOrCat = filters.account !== 'ALL' || filters.category !== 'ALL';
-    if (timeMode === 'recent' && !hasSearch && !hasAccOrCat) {
+    if (timeMode === 'recent' && !hasSearch) {
       const today = getLocalDateOffset(0);
       const yesterday = getLocalDateOffset(-1);
       return filteredTransactions.filter(
@@ -109,7 +122,7 @@ export default function HomeScreen() {
       );
     }
     return filteredTransactions;
-  }, [filteredTransactions, timeMode, filters.searchQuery, filters.account, filters.category]);
+  }, [filteredTransactions, timeMode, filters.searchQuery]);
 
   const kpiStats = useMemo(
     () => computeKPIStats(displayTransactions, baseCurrency, exchangeRates, transactions),

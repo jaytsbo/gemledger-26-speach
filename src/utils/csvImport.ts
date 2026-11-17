@@ -125,13 +125,26 @@ function normalizeTime(raw?: string): string {
 
 function parseAmount(raw?: string): number | null {
   if (!raw) return null;
-  const cleaned = raw
-    .trim()
-    .replace(/,/g, '')
-    .replace(/[^\d.+-]/g, '');
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const parenMatch = trimmed.match(/^\((.+)\)$/);
+  const hasTrailingMinus = !parenMatch && trimmed.endsWith('-');
+  const isAccountingNegative = Boolean(parenMatch || hasTrailingMinus);
+
+  const source = parenMatch ? parenMatch[1] : hasTrailingMinus ? trimmed.slice(0, -1) : trimmed;
+  const cleaned = source.replace(/,/g, '').replace(/[^\d.+-]/g, '');
   if (!cleaned) return null;
+
   const num = Number(cleaned);
-  return Number.isFinite(num) ? num : null;
+  if (!Number.isFinite(num)) return null;
+
+  const signed = isAccountingNegative ? -Math.abs(num) : num;
+  const result = signed === 0 ? 0 : signed;
+  if (isAccountingNegative) {
+    console.log(`[csvImport/parseAmount] AccountingNegative - raw="${trimmed}", parsed=${result}`);
+  }
+  return result;
 }
 
 /**

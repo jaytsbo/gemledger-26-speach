@@ -197,16 +197,20 @@ export default function AnalyticsScreen() {
     [scopedTransactions, baseCurrency, exchangeRates],
   );
 
-  const trendStats = useMemo(
-    () =>
-      computeTrendStats(
-        scopedTransactions,
-        baseCurrency,
-        exchangeRates,
-        trendGranularity,
-      ),
-    [scopedTransactions, baseCurrency, exchangeRates, trendGranularity],
-  );
+  const trendStats = useMemo(() => {
+    const filtered = selectedCategory
+      ? scopedTransactions.filter((tx) => (tx.category || '').trim() === selectedCategory)
+      : scopedTransactions;
+    console.log(
+      `[AnalyticsScreen/trendStats] Compute - Category:${selectedCategory ?? 'ALL'}, Count:${filtered.length}`,
+    );
+    return computeTrendStats(
+      filtered,
+      baseCurrency,
+      exchangeRates,
+      trendGranularity,
+    );
+  }, [scopedTransactions, selectedCategory, baseCurrency, exchangeRates, trendGranularity]);
 
   const timePillLabel = useMemo(() => {
     if (timeMode === 'all') return '全部';

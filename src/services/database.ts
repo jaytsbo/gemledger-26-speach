@@ -480,6 +480,15 @@ function normalizeInput(item: TransactionInput): Required<TransactionInput> {
   };
 }
 
+/**
+ * 優先精確比對 id，找不到時才退回比對 rowNumber，避免 id=2 與 rowNumber=2 碰撞誤傷他筆資料。
+ */
+function findTxIndexByIdOrRow(data: Transaction[], idOrRow: number | string): number {
+  const target = String(idOrRow);
+  const byId = data.findIndex((d) => String(d.id) === target);
+  return byId !== -1 ? byId : data.findIndex((d) => String(d.rowNumber) === target);
+}
+
 export const Database = {
   async getTransactions(): Promise<Transaction[]> {
     if (!isNativeMobileRuntime()) {
@@ -591,9 +600,7 @@ export const Database = {
     const clean = normalizeInput(updatedItem);
     if (!isNativeMobileRuntime()) {
       const data = LocalStorageBackend.getTransactions();
-      const idx = data.findIndex(
-        (d) => String(d.id) === String(idOrRow) || String(d.rowNumber) === String(idOrRow),
-      );
+      const idx = findTxIndexByIdOrRow(data, idOrRow);
       if (idx === -1) throw new Error('找不到該筆交易紀錄');
       data[idx] = {
         ...data[idx],
@@ -601,53 +608,59 @@ export const Database = {
         updatedAt: new Date().toISOString(),
       };
       LocalStorageBackend.saveTransactions(data);
+      console.log(
+        `[Database/updateTransaction] Local - Target:${idOrRow}, MatchedId:${data[idx].id}`,
+      );
       return { success: true, message: '成功更新紀錄！' };
     }
 
     const db = await getSqliteDb();
     const numericId = Number(idOrRow);
-    const res = await db.runAsync(
-      `UPDATE transactions
-       SET date = ?, time = ?, account = ?, name = ?, category = ?, currency = ?, amount = ?, note = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? OR row_number = ?`,
-      [
-        clean.date,
-        clean.time,
-        clean.account,
-        clean.name,
-        clean.category,
-        clean.currency,
-        clean.amount,
-        clean.note,
-        numericId,
-        numericId,
-      ],
-    );
+    const baseSql = `UPDATE transactions
+       SET date = ?, time = ?, account = ?, name = ?, category = ?, currency = ?, amount = ?, note = ?, updated_at = CURRENT_TIMESTAMP`;
+    const baseParams = [
+      clean.date,
+      clean.time,
+      clean.account,
+      clean.name,
+      clean.category,
+      clean.currency,
+      clean.amount,
+      clean.note,
+      numericId,
+    ];
+    let res = await db.runAsync(`${baseSql} WHERE id = ?`, baseParams);
+    if (res.changes === 0) {
+      res = await db.runAsync(`${baseSql} WHERE row_number = ?`, baseParams);
+    }
+    console.log(`[Database/updateTransaction] SQLite - Target:${idOrRow}, Changes:${res.changes}`);
     if (res.changes === 0) throw new Error('找不到該筆交易紀錄');
     return { success: true, message: '成功更新紀錄！' };
   },
 
   async deleteTransaction(idOrRow: number | string): Promise<ApiActionResult> {
     if (!isNativeMobileRuntime()) {
-      let data = LocalStorageBackend.getTransactions();
-      const initialLen = data.length;
-      data = data.filter(
-        (d) => String(d.id) !== String(idOrRow) && String(d.rowNumber) !== String(idOrRow),
-      );
-      if (data.length === initialLen) throw new Error('找不到該筆交易紀錄');
-      data.forEach((d, idx) => {
-        d.rowNumber = idx + 2;
+      const data = LocalStorageBackend.getTransactions();
+      const idx = findTxIndexByIdOrRow(data, idOrRow);
+      if (idx === -1) throw new Error('找不到該筆交易紀錄');
+      const [removed] = data.splice(idx, 1);
+      data.forEach((d, i) => {
+        d.rowNumber = i + 2;
       });
       LocalStorageBackend.saveTransactions(data);
+      console.log(
+        `[Database/deleteTransaction] Local - Target:${idOrRow}, DeletedId:${removed.id}`,
+      );
       return { success: true, message: '成功刪除紀錄！' };
     }
 
     const db = await getSqliteDb();
     const numericId = Number(idOrRow);
-    const res = await db.runAsync('DELETE FROM transactions WHERE id = ? OR row_number = ?', [
-      numericId,
-      numericId,
-    ]);
+    let res = await db.runAsync('DELETE FROM transactions WHERE id = ?', [numericId]);
+    if (res.changes === 0) {
+      res = await db.runAsync('DELETE FROM transactions WHERE row_number = ?', [numericId]);
+    }
+    console.log(`[Database/deleteTransaction] SQLite - Target:${idOrRow}, Changes:${res.changes}`);
     if (res.changes === 0) throw new Error('找不到該筆交易紀錄');
     return { success: true, message: '成功刪除紀錄！' };
   },

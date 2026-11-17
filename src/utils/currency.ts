@@ -77,8 +77,25 @@ export function convertCurrency(
   if (from === to) return num;
 
   const rates = extractRatesMap(ratesInput);
-  const fromRate = Number(rates[from]) || Number(DEFAULT_EXCHANGE_RATES.rates[from]) || 1;
-  const toRate = Number(rates[to]) || Number(DEFAULT_EXCHANGE_RATES.rates[to]) || 1;
+  const hasNonTwdBase = Boolean(
+    ratesInput &&
+      'base' in ratesInput &&
+      typeof ratesInput.base === 'string' &&
+      ratesInput.base.trim().length > 0 &&
+      ratesInput.base.trim().toUpperCase() !== 'TWD',
+  );
+  const rawFromRate = Number(rates[from]);
+  const rawToRate = Number(rates[to]);
+  const fromRate =
+    rawFromRate || (!hasNonTwdBase ? Number(DEFAULT_EXCHANGE_RATES.rates[from]) : 0) || 1;
+  const toRate =
+    rawToRate || (!hasNonTwdBase ? Number(DEFAULT_EXCHANGE_RATES.rates[to]) : 0) || 1;
+
+  if (!rawFromRate || !rawToRate) {
+    console.log(
+      `[currency/convertCurrency] Fallback - from=${from}, to=${to}, hasNonTwdBase=${hasNonTwdBase}, fromRate=${fromRate}, toRate=${toRate}`,
+    );
+  }
 
   return (num / fromRate) * toRate;
 }

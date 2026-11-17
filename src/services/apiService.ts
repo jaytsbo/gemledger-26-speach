@@ -11,7 +11,9 @@ import { Database } from './database';
 import { fallbackParseTransaction } from './fallbackParser';
 import {
   callGeminiDirectWithKey,
+  clearUserGeminiApiKey,
   loadUserGeminiApiKey,
+  saveUserGeminiApiKey,
 } from './geminiDirectService';
 
 declare const google:
@@ -60,10 +62,17 @@ function getLocalTimeStr(): string {
 
 function escapeCsvField(value: unknown): string {
   const str = String(value ?? '');
-  if (/[",\n\r]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`;
+  const isFormulaPrefix = /^[=+\-@]/.test(str);
+  const isPlainNumber = /^[+-]?\d+(?:\.\d+)?$/.test(str);
+  let safeStr = str;
+  if (isFormulaPrefix && !isPlainNumber) {
+    safeStr = `'${str}`;
+    console.warn('[ApiService/escapeCsvField] Neutralized - Formula prefix escaped');
   }
-  return str;
+  if (/[",\n\r]/.test(safeStr)) {
+    return `"${safeStr.replace(/"/g, '""')}"`;
+  }
+  return safeStr;
 }
 
 class ApiServiceImpl {
@@ -421,6 +430,23 @@ class ApiServiceImpl {
     const hasKey = Boolean(key);
     this._log('hasGeminiApiKey', 'Check', `HasKey:${hasKey}`);
     return hasKey;
+  }
+
+  async getGeminiApiKey(): Promise<string> {
+    const key = await loadUserGeminiApiKey();
+    this._log('getGeminiApiKey', 'Load', `HasKey:${Boolean(key)}`);
+    return key;
+  }
+
+  async saveGeminiApiKey(apiKey: string): Promise<void> {
+    const hasKey = Boolean(apiKey.trim());
+    this._log('saveGeminiApiKey', 'Save', `HasKey:${hasKey}`);
+    await saveUserGeminiApiKey(apiKey);
+  }
+
+  async clearGeminiApiKey(): Promise<void> {
+    this._log('clearGeminiApiKey', 'Clear', 'Removing stored user Gemini API key');
+    await clearUserGeminiApiKey();
   }
 
   async callGeminiBookkeeper(

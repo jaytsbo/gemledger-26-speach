@@ -119,6 +119,64 @@ function triggerHapticLight(): void {
   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 }
 
+function validateManualFields(params: {
+  expression: string;
+  date: string;
+  time: string;
+  isTransferCreate: boolean;
+  account: string;
+  toAccount: string;
+}): { error?: string; finalAmount: number; cleanDate: string; cleanTime: string } {
+  const finalAmount = Math.max(0, evaluateArithmeticExpression(params.expression));
+  if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
+    return { error: '請輸入大於 0 的有效金額', finalAmount: 0, cleanDate: '', cleanTime: '' };
+  }
+  const cleanDate = params.date.trim();
+  const cleanTime = params.time.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate) || !/^\d{2}:\d{2}$/.test(cleanTime)) {
+    return { error: '請輸入有效日期 (YYYY-MM-DD) 與時間 (HH:mm)', finalAmount, cleanDate, cleanTime };
+  }
+  if (params.isTransferCreate && params.toAccount === params.account) {
+    return { error: '轉出與轉入帳戶不可相同', finalAmount, cleanDate, cleanTime };
+  }
+  return { finalAmount, cleanDate, cleanTime };
+}
+
+function buildManualTransferInputs(params: {
+  date: string;
+  time: string;
+  account: string;
+  toAccount: string;
+  itemName: string;
+  currency: CurrencyCode;
+  amount: number;
+  note: string;
+}): TransactionInput[] {
+  const customName = params.itemName.trim();
+  return [
+    {
+      date: params.date,
+      time: params.time,
+      account: params.account,
+      name: customName || '轉帳至' + params.toAccount,
+      category: '內部轉帳',
+      currency: params.currency,
+      amount: -params.amount,
+      note: params.note,
+    },
+    {
+      date: params.date,
+      time: params.time,
+      account: params.toAccount,
+      name: customName || '從' + params.account + '轉入',
+      category: '內部轉帳',
+      currency: params.currency,
+      amount: params.amount,
+      note: params.note,
+    },
+  ];
+}
+
 export default function QuickAddModalScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ editId?: string; mode?: string }>();
@@ -141,8 +199,9 @@ export default function QuickAddModalScreen() {
 
   const editingTransaction = useMemo(() => {
     if (!editId) return undefined;
-    return transactions.find(
-      (tx) => String(tx.id) === editId || String(tx.rowNumber ?? '') === editId,
+    return (
+      transactions.find((tx) => String(tx.id) === editId) ??
+      transactions.find((tx) => String(tx.rowNumber ?? '') === editId)
     );
   }, [editId, transactions]);
 
@@ -154,6 +213,9 @@ export default function QuickAddModalScreen() {
   const [currency, setCurrency] = useState<CurrencyCode>(baseCurrency || 'TWD');
   const [category, setCategory] = useState<string>(settings.categories[0] || '食');
   const [account, setAccount] = useState<string>(settings.accounts[0] || '現金');
+  const [toAccount, setToAccount] = useState<string>(
+    () => settings.accounts[1] || settings.accounts[0] || '現金',
+  );
   const [itemName, setItemName] = useState('');
   const [note, setNote] = useState('');
   const [date, setDate] = useState(getNowDateStr);
@@ -309,19 +371,28 @@ export default function QuickAddModalScreen() {
 
   const handleSaveManual = async () => {
     if (isSubmittingManual) return;
-
-    const finalAmount = Math.max(0, evaluateArithmeticExpression(expression));
-    if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
-      setErrorBanner('請輸入大於 0 的有效金額');
+    const isTransferCreate = category === '內部轉帳' && !editingTransaction && !editId;
+    const check = validateManualFields({
+      expression,
+      date,
+      time,
+      isTransferCreate,
+      account,
+      toAccount,
+    });
+    if (check.error) {
+      console.warn(`[QuickAdd/handleSaveManual] ValidationFailed - ${check.error}`);
+      setFeedbackBanner(null);
+      setErrorBanner(check.error);
       return;
     }
 
+    const { finalAmount, cleanDate, cleanTime } = check;
     const signedAmount = isExpense ? -finalAmount : finalAmount;
     const cleanName = itemName.trim() || category || (isExpense ? '一般支出' : '一般收入');
-
     const payload: TransactionInput = {
-      date: date.trim() || getNowDateStr(),
-      time: time.trim() || getNowTimeStr(),
+      date: cleanDate,
+      time: cleanTime,
       account,
       name: cleanName,
       category,
@@ -337,19 +408,30 @@ export default function QuickAddModalScreen() {
     try {
       if (editingTransaction) {
         const targetId = editingTransaction.id ?? editingTransaction.rowNumber!;
-        console.log(
-          `[QuickAdd/handleSaveManual] Update - Target:${targetId}, Name:${payload.name}, Amt:${payload.amount}`,
-        );
+        console.log(`[QuickAdd/handleSaveManual] Update - Target:${targetId}, Name:${payload.name}, Amt:${payload.amount}`);
         await updateTransaction(targetId, payload);
         triggerHapticSuccess();
         closeModal();
         return;
       }
 
-      console.log(
-        `[QuickAdd/handleSaveManual] Create - Name:${payload.name}, Amt:${payload.amount} ${payload.currency}, Continuous:${continuousMode}`,
-      );
-      await addTransaction(payload);
+      if (isTransferCreate) {
+        const pair = buildManualTransferInputs({
+          date: cleanDate,
+          time: cleanTime,
+          account,
+          toAccount,
+          itemName,
+          currency,
+          amount: finalAmount,
+          note: note.trim(),
+        });
+        console.log(`[QuickAdd/handleSaveManual] TransferCreate - From:${account}, To:${toAccount}, Amt:${finalAmount} ${currency}`);
+        await batchAddTransactions(pair);
+      } else {
+        console.log(`[QuickAdd/handleSaveManual] Create - Name:${payload.name}, Amt:${payload.amount} ${payload.currency}, Continuous:${continuousMode}`);
+        await addTransaction(payload);
+      }
       triggerHapticSuccess();
 
       if (continuousMode) {
@@ -357,7 +439,11 @@ export default function QuickAddModalScreen() {
         setItemName('');
         setNote('');
         setTime(getNowTimeStr());
-        setFeedbackBanner(`✓ 已寫入「${cleanName}」${formatMoney(signedAmount, currency)}，請繼續記下一筆`);
+        setFeedbackBanner(
+          isTransferCreate
+            ? `✓ 已建立內部轉帳 ${account} → ${toAccount} ${formatMoney(finalAmount, currency)}，請繼續記下一筆`
+            : `✓ 已寫入「${cleanName}」${formatMoney(signedAmount, currency)}，請繼續記下一筆`,
+        );
       } else {
         closeModal();
       }
@@ -1067,44 +1153,59 @@ export default function QuickAddModalScreen() {
               </View>
 
               {/* Account Chips */}
-              <View style={styles.sectionBlock}>
-                <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>帳戶</Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.horizontalList}
-                >
-                  {settings.accounts.map((acc) => {
-                    const selected = account === acc;
-                    const meta = getAccountMeta(acc);
-                    return (
-                      <Pressable
-                        key={acc}
-                        onPress={() => {
-                          triggerHapticLight();
-                          setAccount(acc);
-                        }}
-                        style={[
-                          styles.chipPill,
-                          {
-                            backgroundColor: selected ? meta.color : colors.card,
-                            borderColor: selected ? meta.color : colors.border,
-                          },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.chipPillText,
-                            { color: selected ? '#FFFFFF' : colors.text },
-                          ]}
-                        >
-                          {acc}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-              </View>
+              {[
+                { label: '帳戶', selectedAcc: account, onSelect: setAccount, visible: true },
+                {
+                  label: '轉入帳戶',
+                  selectedAcc: toAccount,
+                  onSelect: setToAccount,
+                  visible: category === '內部轉帳' && !editingTransaction && !editId,
+                },
+              ]
+                .filter((sec) => sec.visible)
+                .map((sec) => (
+                  <View key={sec.label} style={styles.sectionBlock}>
+                    <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+                      {sec.label}
+                    </Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.horizontalList}
+                    >
+                      {settings.accounts.map((acc) => {
+                        const selected = sec.selectedAcc === acc;
+                        const meta = getAccountMeta(acc);
+                        return (
+                          <Pressable
+                            key={acc}
+                            onPress={() => {
+                              triggerHapticLight();
+                              sec.onSelect(acc);
+                              setErrorBanner(null);
+                            }}
+                            style={[
+                              styles.chipPill,
+                              {
+                                backgroundColor: selected ? meta.color : colors.card,
+                                borderColor: selected ? meta.color : colors.border,
+                              },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.chipPillText,
+                                { color: selected ? '#FFFFFF' : colors.text },
+                              ]}
+                            >
+                              {acc}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                ))}
 
               {/* Item Name, Note, Date & Time */}
               <View style={[styles.formCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>

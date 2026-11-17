@@ -197,6 +197,50 @@ describe('Currency & Analytics', () => {
     assert.equal(catStats[1].category, '食');
     assert.equal(catStats[1].amount, 200);
   });
+
+  it('computes KPI Engel ratio properly when food category is 餐飲', () => {
+    const txs: Transaction[] = [
+      {
+        id: 10,
+        date: '2026-11-10',
+        time: '09:00',
+        account: '永豐銀行',
+        name: '薪資',
+        category: '收入',
+        currency: 'TWD',
+        amount: 10000,
+        note: '',
+      },
+      {
+        id: 11,
+        date: '2026-11-11',
+        time: '12:30',
+        account: '現金',
+        name: '商務午餐',
+        category: '餐飲',
+        currency: 'TWD',
+        amount: -400,
+        note: '',
+      },
+      {
+        id: 12,
+        date: '2026-11-11',
+        time: '18:00',
+        account: '悠遊卡',
+        name: '高鐵票',
+        category: '行',
+        currency: 'TWD',
+        amount: -600,
+        note: '',
+      },
+    ];
+
+    const kpi = computeKPIStats(txs, 'TWD', DEFAULT_EXCHANGE_RATES);
+    assert.equal(kpi.realIncome, 10000);
+    assert.equal(kpi.realExpense, 1000);
+    assert.equal(kpi.foodAmount, 400);
+    assert.equal(kpi.foodRatio, 40);
+  });
 });
 
 describe('ApiService & Cascade Deletion', () => {
@@ -258,6 +302,89 @@ describe('ApiService & Cascade Deletion', () => {
     assert.equal(res.parsedTransactions[0].amount, -180);
     assert.equal(res.parsedTransactions[0].category, '食');
     assert.equal(res.parsedTransactions[0].account, '現金');
+  });
+
+  it('does not collide id with rowNumber when updating or deleting transaction id=2', async () => {
+    const initialTx = await ApiService.getSheetData(true);
+    const tx1Before = initialTx.find((t) => t.id === 1);
+    const tx2Before = initialTx.find((t) => t.id === 2);
+    assert.ok(tx1Before && tx1Before.rowNumber === 2);
+    assert.ok(tx2Before && tx2Before.rowNumber === 3);
+
+    await ApiService.updateTransaction(2, {
+      date: tx2Before.date,
+      time: tx2Before.time,
+      account: tx2Before.account,
+      name: '捷運通勤更新',
+      category: tx2Before.category,
+      currency: tx2Before.currency,
+      amount: -40,
+      note: 'updated id 2',
+    });
+
+    const afterUpdateTx = await ApiService.getSheetData(true);
+    assert.equal(afterUpdateTx.find((t) => t.id === 1)?.name, tx1Before.name);
+    assert.equal(afterUpdateTx.find((t) => t.id === 2)?.name, '捷運通勤更新');
+    assert.equal(afterUpdateTx.find((t) => t.id === 2)?.amount, -40);
+
+    await ApiService.deleteTransaction(2);
+    const afterDeleteTx = await ApiService.getSheetData(true);
+    assert.equal(afterDeleteTx.length, initialTx.length - 1);
+    assert.ok(afterDeleteTx.some((t) => t.id === 1));
+    assert.equal(afterDeleteTx.some((t) => t.id === 2), false);
+  });
+
+  it('neutralizes CSV formula injection in ApiService.exportTransactionsCSV while keeping plain numbers unescaped', async () => {
+    const txs: Transaction[] = [
+      {
+        id: 1,
+        date: '2026-11-16',
+        time: '12:00',
+        account: '現金',
+        name: "=CMD|' /C calc'!A0",
+        category: '食',
+        currency: 'TWD',
+        amount: -280,
+        note: '+SUM(1,2)',
+      },
+      {
+        id: 2,
+        date: '2026-11-16',
+        time: '13:00',
+        account: '現金',
+        name: '@HYPERLINK("http://evil")',
+        category: '食',
+        currency: 'TWD',
+        amount: 100,
+        note: '-1+1',
+      },
+    ];
+
+    const csv = await ApiService.exportTransactionsCSV(txs);
+    const lines = csv.replace(/^\uFEFF/, '').split('\n');
+    assert.equal(lines.length, 3);
+    assert.equal(
+      lines[1],
+      "2026-11-16,12:00,現金,'=CMD|' /C calc'!A0,食,TWD,-280,\"'+SUM(1,2)\"",
+    );
+    assert.equal(
+      lines[2],
+      '2026-11-16,13:00,現金,"\'@HYPERLINK(""http://evil"")",食,TWD,100,\'-1+1',
+    );
+  });
+
+  it('saves, loads, and clears user Gemini API key through ApiService adapter', async () => {
+    await ApiService.clearGeminiApiKey();
+    assert.equal(await ApiService.getGeminiApiKey(), '');
+    assert.equal(await ApiService.hasGeminiApiKey(), false);
+
+    await ApiService.saveGeminiApiKey('  AIzaSyTestKey123  ');
+    assert.equal(await ApiService.getGeminiApiKey(), 'AIzaSyTestKey123');
+    assert.equal(await ApiService.hasGeminiApiKey(), true);
+
+    await ApiService.clearGeminiApiKey();
+    assert.equal(await ApiService.getGeminiApiKey(), '');
+    assert.equal(await ApiService.hasGeminiApiKey(), false);
   });
 });
 
@@ -323,6 +450,22 @@ describe('CSV Import & Spreadsheet ID', () => {
     assert.equal(extractSpreadsheetId(''), null);
     assert.equal(extractSpreadsheetId('https://example.com/not-a-sheet'), null);
     assert.equal(extractSpreadsheetId('short'), null);
+  });
+
+  it('parseCsvTransactions parses accounting parentheses and trailing-minus negative amounts', () => {
+    const csv =
+      '日期,帳戶,項目名稱,分類,幣別,金額,備註\n' +
+      '2026-11-16,永豐銀行,餐費,食,TWD,"(1,250)",括號負數\n' +
+      '2026-11-16,現金,美金消費,食,USD,"($1,200.50)",幣別括號負數\n' +
+      '2026-11-16,悠遊卡,高鐵票,行,TWD,"1,200-",尾綴負號\n' +
+      '2026-11-16,現金,零元測試,其他,TWD,(0),零值\n';
+
+    const drafts = parseCsvTransactions(csv);
+    assert.equal(drafts.length, 4);
+    assert.equal(drafts[0].amount, -1250);
+    assert.equal(drafts[1].amount, -1200.5);
+    assert.equal(drafts[2].amount, -1200);
+    assert.ok(Object.is(drafts[3].amount, 0));
   });
 });
 

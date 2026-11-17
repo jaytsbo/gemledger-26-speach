@@ -28,7 +28,7 @@ import { CurrencyFxModal } from '@/components/settings/CurrencyFxModal';
 import { ExportBackupModal } from '@/components/settings/ExportBackupModal';
 import { ImportDataModal } from '@/components/settings/ImportDataModal';
 import { FeedbackState } from '@/components/settings/settingsHelpers';
-import { loadUserGeminiApiKey } from '@/services/geminiDirectService';
+import { ApiService } from '@/services/apiService';
 import { useLedgerStore } from '@/store/useLedgerStore';
 import { useAppTheme } from '@/theme/ThemeContext';
 
@@ -113,9 +113,14 @@ export default function SettingsScreen() {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const userKey = await loadUserGeminiApiKey();
-      if (mounted) {
-        setHasUserApiKey(Boolean(userKey));
+      try {
+        const userKey = await ApiService.getGeminiApiKey();
+        console.log(`[Settings/SettingsScreen] LoadUserApiKey - hasKey=${Boolean(userKey)}`);
+        if (mounted) {
+          setHasUserApiKey(Boolean(userKey));
+        }
+      } catch (err) {
+        console.warn('[Settings/SettingsScreen] LoadUserApiKeyFailed -', err);
       }
     })();
     return () => {

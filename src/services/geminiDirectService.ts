@@ -20,11 +20,16 @@ function getSecureStore(): {
   deleteItemAsync: (k: string) => Promise<void>;
 } | null {
   try {
-    if (typeof navigator !== 'undefined' && navigator.product === 'ReactNative') {
+    const isNode = typeof process !== 'undefined' && Boolean(process.versions?.node);
+    if (!isWebStorageAvailable() && !isNode) {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       return require('expo-secure-store');
     }
-  } catch {
+  } catch (err) {
+    console.warn(
+      '[GeminiDirect/getSecureStore] Unavailable -',
+      err instanceof Error ? err.message : 'require failed',
+    );
     return null;
   }
   return null;
@@ -136,6 +141,51 @@ Output JSON schema:
 }`;
 }
 
+function matchWhitelist(
+  candidate: unknown,
+  whitelist: readonly string[],
+  fallback: string,
+): string {
+  const trimmed = typeof candidate === 'string' ? candidate.trim() : '';
+  if (!trimmed || whitelist.length === 0) return fallback;
+  const exact = whitelist.find((item) => item === trimmed);
+  if (exact) return exact;
+  const lower = trimmed.toLowerCase();
+  const ciMatch = whitelist.find((item) => item.trim().toLowerCase() === lower);
+  return ciMatch ?? fallback;
+}
+
+function sanitizeGeminiDraft(
+  draft: Partial<AIParsedDraft>,
+  settings: CustomSettings,
+  currentDateStr: string,
+  currentTimeStr: string,
+): AIParsedDraft {
+  const accounts = Array.isArray(settings.accounts) ? settings.accounts : [];
+  const categories = Array.isArray(settings.categories) ? settings.categories : [];
+  const accountFallback = accounts[0] || '現金';
+  const categoryFallback = categories.includes('其他')
+    ? '其他'
+    : categories[0] || '食';
+
+  const parsedAmount = Number(draft.amount);
+  const amount = Number.isFinite(parsedAmount) && parsedAmount !== 0 ? parsedAmount : -100;
+
+  return {
+    name: typeof draft.name === 'string' && draft.name.trim() ? draft.name.trim() : 'AI 記帳項目',
+    amount,
+    currency:
+      typeof draft.currency === 'string' && draft.currency.trim()
+        ? draft.currency.trim().toUpperCase()
+        : settings.baseCurrency || 'TWD',
+    category: matchWhitelist(draft.category, categories, categoryFallback),
+    account: matchWhitelist(draft.account, accounts, accountFallback),
+    date: typeof draft.date === 'string' && draft.date.trim() ? draft.date.trim() : currentDateStr,
+    time: typeof draft.time === 'string' && draft.time.trim() ? draft.time.trim() : currentTimeStr,
+    note: typeof draft.note === 'string' ? draft.note : '',
+  };
+}
+
 /**
  * Call Google Gemini REST API directly using the user's own API key (BYOK),
  * iterating over the frozen `modelsCascade` order with fallback to local rule parser.
@@ -217,16 +267,24 @@ export async function callGeminiDirectWithKey(
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       };
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      if (!rawText) continue;
+      const cleanedJson = rawText
+        .trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+      if (!cleanedJson) continue;
 
-      const parsed = JSON.parse(rawText) as {
+      const parsed = JSON.parse(cleanedJson) as {
         reply?: string;
-        transactions?: AIParsedDraft[];
+        transactions?: Array<Partial<AIParsedDraft>>;
       };
 
-      const drafts = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+      const rawDrafts = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+      const drafts = rawDrafts
+        .filter((d): d is Partial<AIParsedDraft> => Boolean(d && typeof d === 'object'))
+        .map((d) => sanitizeGeminiDraft(d, settings, currentDateStr, currentTimeStr));
       console.log(
-        `[GeminiDirect/callGeminiDirectWithKey] Success - Model:${model}, Drafts:${drafts.length}`,
+        `[GeminiDirect/callGeminiDirectWithKey] Success - Model:${model}, RawDrafts:${rawDrafts.length}, Drafts:${drafts.length}`,
       );
       return {
         reply: parsed.reply || `已使用您的 Gemini Key (${model}) 解析 ${drafts.length} 筆交易。`,

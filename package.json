@@ -1,6 +1,6 @@
 {
   "name": "gemledger-26",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "GemLedger-26 Mobile — Local-First 多幣別 AI 智慧記帳系統 (React Native + Expo + SQLite + Gemini 3.5 AI)",
   "main": "expo-router/entry",
   "scripts": {
@@ -15,7 +15,8 @@
     "ver:minor": "node scripts/version.mjs minor",
     "ver:major": "node scripts/version.mjs major",
     "ver:code": "node scripts/version.mjs code",
-    "build:apk": "node scripts/build-apk.mjs"
+    "build:apk": "node scripts/build-apk.mjs",
+    "release:apk": "npm run ver:patch && npm run build:apk"
   },
   "keywords": [
     "react-native",
@@ -46,7 +47,6 @@
     "expo-sqlite": "~15.1.0",
     "expo-status-bar": "~2.0.0",
     "lucide-react-native": "^0.468.0",
-    "query-string": "^7.1.3",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-native": "0.76.5",

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useColorScheme } from 'react-native';
+import { useLedgerStore } from '../store/useLedgerStore';
 import { DARK_COLORS, LIGHT_COLORS, ThemeColors, ThemeMode } from './colors';
 
 const THEME_STORAGE_KEY = 'GEMLEDGER_THEME_MODE';
@@ -46,18 +47,35 @@ function writeStoredThemeMode(mode: ThemeMode): void {
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const systemScheme = useColorScheme();
+  const storeThemeMode = useLedgerStore((s) => s.settings.themeMode);
   const [mode, setModeState] = useState<ThemeMode>('system');
 
   useEffect(() => {
     const saved = readStoredThemeMode();
     if (saved) {
+      console.log(`[ThemeContext/init] RestoreWeb - Mode:${saved}`);
       setModeState(saved);
     }
   }, []);
 
+  useEffect(() => {
+    if (
+      !readStoredThemeMode() &&
+      (storeThemeMode === 'light' || storeThemeMode === 'dark' || storeThemeMode === 'system')
+    ) {
+      console.log(`[ThemeContext/syncStore] Sync - Mode:${storeThemeMode}`);
+      setModeState(storeThemeMode);
+    }
+  }, [storeThemeMode]);
+
   const setMode = (nextMode: ThemeMode) => {
+    console.log(`[ThemeContext/setMode] Update - Mode:${nextMode}`);
     setModeState(nextMode);
     writeStoredThemeMode(nextMode);
+    useLedgerStore
+      .getState()
+      .updateSettings({ themeMode: nextMode })
+      .catch(() => {});
   };
 
   const isDark = useMemo(() => {

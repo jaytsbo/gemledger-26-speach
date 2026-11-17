@@ -75,6 +75,23 @@ export async function startRecording(): Promise<void> {
   console.log(`[VoiceRecorder/startRecording] Started - Platform:${Platform.OS}`);
 }
 
+function revokeWebBlobUrl(uri: string | null | undefined, caller: string): void {
+  if (
+    Platform.OS === 'web' &&
+    uri &&
+    uri.startsWith('blob:') &&
+    typeof URL !== 'undefined' &&
+    typeof URL.revokeObjectURL === 'function'
+  ) {
+    try {
+      URL.revokeObjectURL(uri);
+      console.log(`[VoiceRecorder/${caller}] Cleanup - Revoked web blob URL`);
+    } catch {
+      // Ignore revoke errors on unsupported environments
+    }
+  }
+}
+
 export async function stopRecording(): Promise<VoiceRecordingResult> {
   if (!activeRecording) {
     throw new Error('目前沒有進行中的錄音');
@@ -98,17 +115,24 @@ export async function stopRecording(): Promise<VoiceRecordingResult> {
   let base64 = '';
   let mimeType = 'audio/mp4';
 
-  if (Platform.OS === 'web') {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    mimeType = normalizeAudioMimeType(blob.type, 'audio/webm');
-    base64 = await readBlobAsBase64(blob);
-  } else {
-    mimeType = inferNativeMimeType(uri);
-    base64 = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+  try {
+    if (Platform.OS === 'web') {
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      mimeType = normalizeAudioMimeType(blob.type, 'audio/webm');
+      base64 = await readBlobAsBase64(blob);
+    } else {
+      mimeType = inferNativeMimeType(uri);
+      base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+    }
+  } finally {
+    if (Platform.OS === 'web') {
+      revokeWebBlobUrl(uri, 'stopRecording');
+    } else {
+      await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
   }
 
   if (!base64) {
@@ -132,12 +156,17 @@ export async function cancelRecording(): Promise<void> {
   const recording = activeRecording;
   activeRecording = null;
 
-  const uri = recording.getURI();
-  await recording.stopAndUnloadAsync().catch(() => {});
-  await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
-
-  if (Platform.OS !== 'web' && uri) {
-    await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+  let uri = recording.getURI();
+  try {
+    await recording.stopAndUnloadAsync().catch(() => {});
+    uri = recording.getURI() || uri;
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
+  } finally {
+    if (Platform.OS === 'web') {
+      revokeWebBlobUrl(uri, 'cancelRecording');
+    } else if (uri) {
+      await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
+    }
   }
 
   console.log('[VoiceRecorder/cancelRecording] Cancelled - Active recording discarded');

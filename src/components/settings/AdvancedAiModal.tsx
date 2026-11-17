@@ -9,11 +9,7 @@ import {
   View,
 } from 'react-native';
 import { ExternalLink, KeyRound, WifiOff } from 'lucide-react-native';
-import {
-  clearUserGeminiApiKey,
-  loadUserGeminiApiKey,
-  saveUserGeminiApiKey,
-} from '@/services/geminiDirectService';
+import { ApiService } from '@/services/apiService';
 import { useLedgerStore } from '@/store/useLedgerStore';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { SettingsModalFrame } from './SettingsModalFrame';
@@ -41,17 +37,22 @@ export function AdvancedAiModal({
 
   useEffect(() => {
     if (!visible) return;
-    loadUserGeminiApiKey().then((k) => {
-      setHasStoredKey(Boolean(k));
-      setApiKeyInput(k);
-    });
+    ApiService.getGeminiApiKey()
+      .then((k) => {
+        console.log(`[Settings/AdvancedAiModal] LoadUserApiKey - hasKey=${Boolean(k)}`);
+        setHasStoredKey(Boolean(k));
+        setApiKeyInput(k);
+      })
+      .catch((err) => {
+        console.warn('[Settings/AdvancedAiModal] LoadUserApiKeyFailed -', err);
+      });
   }, [visible]);
 
   const handleSaveApiKey = async () => {
     const clean = apiKeyInput.trim();
     console.log(`[Settings/AdvancedAiModal] SaveUserApiKey - hasKey=${Boolean(clean)}`);
     try {
-      await saveUserGeminiApiKey(clean);
+      await ApiService.saveGeminiApiKey(clean);
       setHasStoredKey(Boolean(clean));
       onApiKeyChange?.(Boolean(clean));
       onFeedback({
@@ -69,12 +70,19 @@ export function AdvancedAiModal({
   };
 
   const handleClearApiKey = async () => {
-    console.log('[Settings/AdvancedAiModal] ClearUserApiKey');
-    await clearUserGeminiApiKey();
-    setApiKeyInput('');
-    setHasStoredKey(false);
-    onApiKeyChange?.(false);
-    onFeedback({ type: 'success', message: '已清除個人 Gemini API Key' });
+    console.log('[Settings/AdvancedAiModal] ClearUserApiKey - Clearing via ApiService');
+    try {
+      await ApiService.clearGeminiApiKey();
+      setApiKeyInput('');
+      setHasStoredKey(false);
+      onApiKeyChange?.(false);
+      onFeedback({ type: 'success', message: '已清除個人 Gemini API Key' });
+    } catch (err) {
+      onFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '清除 API Key 失敗',
+      });
+    }
   };
 
   const handleToggle503 = async (nextVal: boolean) => {

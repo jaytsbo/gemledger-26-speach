@@ -49,13 +49,17 @@ export function computeKPIStats(
     } else if (tx.amount < 0) {
       const absAmt = Math.abs(converted);
       realExpense += absAmt;
-      if (cat === '食') {
+      if (cat === '食' || cat === '餐飲') {
         foodAmount += absAmt;
       }
     }
   }
 
   const foodRatio = realExpense > 0 ? Number(((foodAmount / realExpense) * 100).toFixed(1)) : 0;
+
+  console.log(
+    `[analytics/computeKPIStats] Computed - tx=${transactions.length}, base=${baseCurrency}, realExpense=${realExpense}, foodAmount=${foodAmount}, foodRatio=${foodRatio}`,
+  );
 
   return {
     netWorth,
