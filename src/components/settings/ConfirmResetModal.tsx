@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -8,7 +8,9 @@ import {
   View,
 } from 'react-native';
 import { AlertTriangle } from 'lucide-react-native';
+import { MONO_FONT } from '@/components/ui/HudReticle';
 import { useLedgerStore } from '@/store/useLedgerStore';
+import { HUD_RADIUS } from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { SettingsModalFrame } from './SettingsModalFrame';
 import { FeedbackState } from './settingsHelpers';
@@ -28,9 +30,16 @@ export function ConfirmResetModal({
   const resetToSeedData = useLedgerStore((s) => s.resetToSeedData);
   const [isBusy, setIsBusy] = useState(false);
   const [confirmText, setConfirmText] = useState('');
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const isBusyRef = useRef(false);
 
   useEffect(() => {
     setConfirmText('');
+    setInlineError(null);
+    if (!visible) {
+      isBusyRef.current = false;
+      setIsBusy(false);
+    }
   }, [visible]);
 
   const normalizedConfirm = confirmText.trim();
@@ -38,7 +47,9 @@ export function ConfirmResetModal({
     normalizedConfirm.toUpperCase() === 'RESET' || normalizedConfirm === '重置';
 
   const handleConfirmReset = async () => {
-    if (!isConfirmed || isBusy) return;
+    if (!isConfirmed || isBusyRef.current || isBusy) return;
+    isBusyRef.current = true;
+    setInlineError(null);
     console.log('[Settings/ConfirmResetModal] Reset - Resetting to default seed data');
     setIsBusy(true);
     try {
@@ -49,11 +60,14 @@ export function ConfirmResetModal({
       });
       onClose();
     } catch (err) {
+      const msg = err instanceof Error ? err.message : '重置失敗';
+      setInlineError(msg);
       onFeedback({
         type: 'error',
-        message: err instanceof Error ? err.message : '重置失敗',
+        message: msg,
       });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
@@ -61,10 +75,22 @@ export function ConfirmResetModal({
   return (
     <SettingsModalFrame
       visible={visible}
-      title="重置為預設測試資料"
+      title="重置預設資料"
+      subtitle="高風險操作 · 執行後無法復原"
       onClose={onClose}
       scrollable={false}
     >
+      {inlineError ? (
+        <View
+          style={[
+            styles.errorBox,
+            { backgroundColor: colors.expenseBg, borderColor: colors.expense },
+          ]}
+        >
+          <Text style={[styles.errorText, { color: colors.expense }]}>{inlineError}</Text>
+        </View>
+      ) : null}
+
       <View
         style={[
           styles.warningBox,
@@ -96,7 +122,7 @@ export function ConfirmResetModal({
             styles.confirmInput,
             {
               backgroundColor: colors.inputBg,
-              borderColor: colors.border,
+              borderColor: isConfirmed ? colors.danger : colors.border,
               color: colors.text,
             },
           ]}
@@ -109,7 +135,7 @@ export function ConfirmResetModal({
           disabled={isBusy}
           style={[
             styles.btn,
-            { backgroundColor: colors.chipBg, borderColor: colors.border },
+            { backgroundColor: colors.surfaceElevated, borderColor: colors.border },
           ]}
         >
           <Text style={[styles.btnText, { color: colors.text }]}>取消</Text>
@@ -143,7 +169,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 12,
     padding: 14,
-    borderRadius: 16,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   warningText: {
@@ -158,14 +184,16 @@ const styles = StyleSheet.create({
   confirmPrompt: {
     fontSize: 12,
     lineHeight: 18,
-    fontWeight: '600',
+    fontWeight: '700',
+    fontFamily: MONO_FONT,
   },
   confirmInput: {
     height: 42,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     paddingHorizontal: 12,
     fontSize: 13,
+    fontFamily: MONO_FONT,
   },
   btnRow: {
     flexDirection: 'row',
@@ -174,7 +202,7 @@ const styles = StyleSheet.create({
   btn: {
     flex: 1,
     height: 44,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -182,5 +210,16 @@ const styles = StyleSheet.create({
   btnText: {
     fontSize: 14,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.4,
+  },
+  errorBox: {
+    padding: 10,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+  },
+  errorText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

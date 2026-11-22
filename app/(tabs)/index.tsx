@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   Modal,
   Platform,
   Pressable,
@@ -12,9 +14,10 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import {
+  AlertTriangle,
   Calendar,
   Check,
   Filter,
@@ -31,15 +34,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NetWorthHeroCard } from '@/components/NetWorthHeroCard';
 import { TransactionCard } from '@/components/TransactionCard';
+import { CyberNeuralBackground } from '@/components/ui/CyberNeuralBackground';
+import { HudReticle, MONO_FONT } from '@/components/ui/HudReticle';
 import { useLedgerStore } from '@/store/useLedgerStore';
+import { HUD_RADIUS, HUD_RADIUS_LG } from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { Transaction } from '@/types/ledger';
 import {
   DateGroupedSection,
   computeKPIStats,
+  extractAvailableTimeBuckets,
   groupTransactionsByDate,
 } from '@/utils/analytics';
-import { formatMoney } from '@/utils/currency';
+import { getLocalDateOffset } from '@/utils/dateTime';
 
 type PickerType = 'time' | 'account' | 'category' | null;
 type TimeMode = 'recent' | 'year' | 'month' | 'day';
@@ -53,19 +60,14 @@ const TIME_TABS: { key: TimeMode; label: string }[] = [
 
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 
-function getLocalDateOffset(offsetDays: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function formatDateHeader(dateStr: string): { title: string; badge?: string } {
-  const today = getLocalDateOffset(0);
-  const yesterday = getLocalDateOffset(-1);
+function formatDateHeader(
+  dateStr: string,
+  todayStr: string,
+  yesterdayStr: string,
+): { title: string; badge?: string } {
   let badge: string | undefined;
-  if (dateStr === today) badge = '今天';
-  else if (dateStr === yesterday) badge = '昨天';
+  if (dateStr === todayStr) badge = '今天';
+  else if (dateStr === yesterdayStr) badge = '昨天';
 
   const parts = dateStr.split('-').map(Number);
   if (parts.length === 3 && !parts.some(Number.isNaN)) {
@@ -97,32 +99,74 @@ export default function HomeScreen() {
   const [selectedTimeValue, setSelectedTimeValue] = useState<string>('RECENT');
   const [pickerTimeTab, setPickerTimeTab] = useState<TimeMode>('recent');
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [todayKey, setTodayKey] = useState(() => getLocalDateOffset(0));
+  const [yesterdayKey, setYesterdayKey] = useState(() => getLocalDateOffset(-1));
+  const chipPulse = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    const isDefaultStoreFilters =
+    const useNative = Platform.OS !== 'web';
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(chipPulse, {
+          toValue: 0.75,
+          duration: 1800,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(chipPulse, {
+          toValue: 1,
+          duration: 1800,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+    };
+  }, [chipPulse]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const nextToday = getLocalDateOffset(0);
+      const nextYesterday = getLocalDateOffset(-1);
+      setTodayKey((prev) => (prev !== nextToday ? nextToday : prev));
+      setYesterdayKey((prev) => (prev !== nextYesterday ? nextYesterday : prev));
+    }, []),
+  );
+
+  useEffect(() => {
+    const isDefaultTimeFilters =
       filters.year === 'ALL' &&
       filters.month === 'ALL' &&
-      !filters.date &&
-      filters.account === 'ALL' &&
-      filters.category === 'ALL';
-    if (isDefaultStoreFilters && (timeMode !== 'recent' || selectedTimeValue !== 'RECENT')) {
-      console.log('[HomeScreen/filterSync] Reset - Restoring timeMode to recent due to default store filters');
+      !filters.date;
+    if (isDefaultTimeFilters && (timeMode !== 'recent' || selectedTimeValue !== 'RECENT')) {
+      console.log(
+        '[HomeScreen/filterSync] Reset - Restoring timeMode to recent due to cleared time filters',
+      );
       setTimeMode('recent');
       setSelectedTimeValue('RECENT');
     }
-  }, [filters.year, filters.month, filters.date, filters.account, filters.category, timeMode, selectedTimeValue]);
+  }, [filters.year, filters.month, filters.date, timeMode, selectedTimeValue]);
+
+  const expandToAllPeriod = useMemo(
+    () =>
+      Boolean(filters.searchQuery.trim()) ||
+      filters.account !== 'ALL' ||
+      filters.category !== 'ALL',
+    [filters.searchQuery, filters.account, filters.category],
+  );
 
   const displayTransactions = useMemo(() => {
-    const hasSearch = Boolean(filters.searchQuery.trim());
-    if (timeMode === 'recent' && !hasSearch) {
-      const today = getLocalDateOffset(0);
-      const yesterday = getLocalDateOffset(-1);
+    if (timeMode === 'recent' && !expandToAllPeriod) {
       return filteredTransactions.filter(
-        (tx) => tx.date === today || tx.date === yesterday,
+        (tx) => tx.date === todayKey || tx.date === yesterdayKey,
       );
     }
     return filteredTransactions;
-  }, [filteredTransactions, timeMode, filters.searchQuery]);
+  }, [filteredTransactions, timeMode, expandToAllPeriod, todayKey, yesterdayKey]);
 
   const kpiStats = useMemo(
     () => computeKPIStats(displayTransactions, baseCurrency, exchangeRates, transactions),
@@ -130,39 +174,15 @@ export default function HomeScreen() {
   );
 
   const sections = useMemo(
-    () => groupTransactionsByDate(displayTransactions, baseCurrency, exchangeRates),
-    [displayTransactions, baseCurrency, exchangeRates],
+    () => groupTransactionsByDate(displayTransactions),
+    [displayTransactions],
   );
 
-  const availableYears = useMemo(() => {
-    const set = new Set<string>();
-    for (const tx of transactions) {
-      if (tx.date && tx.date.length >= 4) {
-        set.add(tx.date.slice(0, 4));
-      }
-    }
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [transactions]);
-
-  const availableMonths = useMemo(() => {
-    const set = new Set<string>();
-    for (const tx of transactions) {
-      if (tx.date && tx.date.length >= 7) {
-        set.add(tx.date.slice(0, 7));
-      }
-    }
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [transactions]);
-
-  const availableDays = useMemo(() => {
-    const set = new Set<string>();
-    for (const tx of transactions) {
-      if (tx.date && tx.date.length >= 10) {
-        set.add(tx.date.slice(0, 10));
-      }
-    }
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [transactions]);
+  const {
+    years: availableYears,
+    months: availableMonths,
+    days: availableDays,
+  } = useMemo(() => extractAvailableTimeBuckets(transactions), [transactions]);
 
   const hasActiveFilters = useMemo(() => {
     return (
@@ -173,28 +193,27 @@ export default function HomeScreen() {
     );
   }, [timeMode, filters.account, filters.category, filters.searchQuery]);
 
-  const periodLabel = useMemo(() => {
-    if (timeMode === 'day' && selectedTimeValue) return selectedTimeValue;
-    if (timeMode === 'month' && selectedTimeValue) return selectedTimeValue;
-    if (timeMode === 'year' && selectedTimeValue) return `${selectedTimeValue}年`;
-    if (filters.account !== 'ALL') return filters.account;
-    if (filters.category !== 'ALL') return filters.category;
-    if (Boolean(filters.searchQuery.trim())) return '全部期間';
-    return '近兩日';
-  }, [timeMode, selectedTimeValue, filters.account, filters.category, filters.searchQuery]);
-
   const timePillLabel = useMemo(() => {
-    if (timeMode === 'recent') return '時間: 近兩日';
+    if (timeMode === 'recent') {
+      return expandToAllPeriod ? '時間: 全部期間' : '時間: 近兩日';
+    }
     return `時間: ${selectedTimeValue}`;
-  }, [timeMode, selectedTimeValue]);
+  }, [timeMode, selectedTimeValue, expandToAllPeriod]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    setRefreshError(null);
+    const nextToday = getLocalDateOffset(0);
+    const nextYesterday = getLocalDateOffset(-1);
+    setTodayKey(nextToday);
+    setYesterdayKey(nextYesterday);
     console.log('[HomeScreen/refresh] Request - Pull-to-refresh');
     try {
       await refreshAll(true);
     } catch (err) {
-      console.warn('[HomeScreen/refresh] Error -', err);
+      const msg = err instanceof Error ? err.message : '重新整理失敗，請稍後再試';
+      console.warn('[HomeScreen/refresh] Error -', msg);
+      setRefreshError(msg);
     } finally {
       setRefreshing(false);
     }
@@ -264,13 +283,11 @@ export default function HomeScreen() {
           options: availableMonths.map((ym) => ({ value: ym, label: ym })),
         };
       }
-      const today = getLocalDateOffset(0);
-      const yesterday = getLocalDateOffset(-1);
       return {
         title: '篩選時間',
         selected: timeMode === 'day' ? selectedTimeValue : '',
         options: availableDays.map((d) => {
-          const tag = d === today ? ' (今天)' : d === yesterday ? ' (昨天)' : '';
+          const tag = d === todayKey ? ' (今天)' : d === yesterdayKey ? ' (昨天)' : '';
           return { value: d, label: `${d}${tag}` };
         }),
       };
@@ -304,6 +321,8 @@ export default function HomeScreen() {
     availableYears,
     availableMonths,
     availableDays,
+    todayKey,
+    yesterdayKey,
     filters.account,
     filters.category,
     settings.accounts,
@@ -315,11 +334,28 @@ export default function HomeScreen() {
       {/* Top App Bar */}
       <View style={styles.topBar}>
         <View style={styles.brandRow}>
+          <View
+            style={[
+              styles.titleAccent,
+              { backgroundColor: colors.primary, shadowColor: colors.primary },
+            ]}
+          />
           <Text style={[styles.brandTitle, { color: colors.text }]}>GemLedger</Text>
-          <View style={[styles.versionChip, { backgroundColor: colors.primaryLight }]}>
-            <Sparkles size={11} color={colors.primary} />
-            <Text style={[styles.versionChipText, { color: colors.primary }]}>AI 26</Text>
-          </View>
+          <Animated.View
+            style={[
+              styles.versionChip,
+              {
+                backgroundColor: colors.accentBg,
+                borderColor: colors.accent,
+                opacity: chipPulse,
+              },
+            ]}
+          >
+            <Sparkles size={10} color={colors.accent} />
+            <Text style={[styles.versionChipText, { color: colors.accent }]}>
+              AI 26
+            </Text>
+          </Animated.View>
         </View>
 
         <Pressable
@@ -327,8 +363,8 @@ export default function HomeScreen() {
           style={({ pressed }) => [
             styles.themeBtn,
             {
-              backgroundColor: colors.surface,
-              borderColor: colors.border,
+              backgroundColor: colors.primaryBg,
+              borderColor: colors.primaryGlow,
             },
             pressed && { opacity: 0.75 },
           ]}
@@ -336,27 +372,47 @@ export default function HomeScreen() {
           accessibilityLabel="切換深淺色主題"
         >
           {isDark ? (
-            <Sun size={18} color={colors.warning} />
+            <Sun size={18} color={colors.primary} />
           ) : (
-            <Moon size={18} color={colors.textSecondary} />
+            <Moon size={18} color={colors.primary} />
           )}
         </Pressable>
       </View>
 
       {/* Net Worth Hero Card */}
-      <NetWorthHeroCard stats={kpiStats} periodLabel={periodLabel} />
+      <NetWorthHeroCard stats={kpiStats} />
+
+      {refreshError ? (
+        <View
+          style={[
+            styles.refreshErrorBanner,
+            { backgroundColor: colors.expenseBg, borderColor: colors.expense },
+          ]}
+        >
+          <AlertTriangle size={15} color={colors.expense} />
+          <Text style={[styles.refreshErrorText, { color: colors.expense }]}>
+            {refreshError}
+          </Text>
+          <Pressable onPress={() => setRefreshError(null)} hitSlop={8}>
+            <X size={15} color={colors.textMuted} />
+          </Pressable>
+        </View>
+      ) : null}
 
       {/* Search Bar */}
       <View
         style={[
           styles.searchContainer,
           {
-            backgroundColor: colors.surface,
-            borderColor: colors.border,
+            backgroundColor: colors.inputBg,
+            borderColor: filters.searchQuery ? colors.primary : colors.cardBorder,
           },
         ]}
       >
-        <Search size={17} color={colors.textMuted} />
+        <Search
+          size={16}
+          color={filters.searchQuery ? colors.primary : colors.textMuted}
+        />
         <TextInput
           value={filters.searchQuery}
           onChangeText={(text) => setFilter({ searchQuery: text })}
@@ -388,14 +444,14 @@ export default function HomeScreen() {
             styles.filterPill,
             {
               backgroundColor:
-                timeMode !== 'recent' ? colors.primaryLight : colors.surface,
+                timeMode !== 'recent' ? colors.primaryBg : colors.surface,
               borderColor:
-                timeMode !== 'recent' ? colors.primary : colors.border,
+                timeMode !== 'recent' ? colors.primary : colors.cardBorder,
             },
           ]}
         >
           <Calendar
-            size={13}
+            size={12}
             color={timeMode !== 'recent' ? colors.primary : colors.textSecondary}
           />
           <Text
@@ -416,13 +472,14 @@ export default function HomeScreen() {
             styles.filterPill,
             {
               backgroundColor:
-                filters.account !== 'ALL' ? colors.primaryLight : colors.surface,
-              borderColor: filters.account !== 'ALL' ? colors.primary : colors.border,
+                filters.account !== 'ALL' ? colors.primaryBg : colors.surface,
+              borderColor:
+                filters.account !== 'ALL' ? colors.primary : colors.cardBorder,
             },
           ]}
         >
           <Landmark
-            size={13}
+            size={12}
             color={filters.account !== 'ALL' ? colors.primary : colors.textSecondary}
           />
           <Text
@@ -433,7 +490,9 @@ export default function HomeScreen() {
               },
             ]}
           >
-            {filters.account === 'ALL' ? '帳戶: 全部' : filters.account}
+            {filters.account === 'ALL'
+              ? '帳戶: 全部'
+              : `${filters.account}`}
           </Text>
         </Pressable>
 
@@ -443,13 +502,14 @@ export default function HomeScreen() {
             styles.filterPill,
             {
               backgroundColor:
-                filters.category !== 'ALL' ? colors.primaryLight : colors.surface,
-              borderColor: filters.category !== 'ALL' ? colors.primary : colors.border,
+                filters.category !== 'ALL' ? colors.primaryBg : colors.surface,
+              borderColor:
+                filters.category !== 'ALL' ? colors.primary : colors.cardBorder,
             },
           ]}
         >
           <Tag
-            size={13}
+            size={12}
             color={filters.category !== 'ALL' ? colors.primary : colors.textSecondary}
           />
           <Text
@@ -460,7 +520,9 @@ export default function HomeScreen() {
               },
             ]}
           >
-            {filters.category === 'ALL' ? '分類: 全部' : filters.category}
+            {filters.category === 'ALL'
+              ? '分類: 全部'
+              : `${filters.category}`}
           </Text>
         </Pressable>
 
@@ -475,8 +537,10 @@ export default function HomeScreen() {
               },
             ]}
           >
-            <RotateCcw size={13} color={colors.expense} />
-            <Text style={[styles.filterPillText, { color: colors.expense }]}>重置篩選</Text>
+            <RotateCcw size={12} color={colors.expense} />
+            <Text style={[styles.filterPillText, { color: colors.expense }]}>
+              重置篩選
+            </Text>
           </Pressable>
         )}
       </ScrollView>
@@ -484,7 +548,7 @@ export default function HomeScreen() {
       {/* Timeline Section Title */}
       <View style={styles.timelineTitleRow}>
         <View style={styles.timelineTitleLeft}>
-          <Filter size={14} color={colors.textMuted} />
+          <Filter size={13} color={colors.accent} />
           <Text style={[styles.timelineTitle, { color: colors.textSecondary }]}>
             交易明細時間軸
           </Text>
@@ -493,14 +557,80 @@ export default function HomeScreen() {
     </View>
   );
 
+  const keyExtractor = useCallback((item: Transaction, index: number) => {
+    if (item.id !== undefined && item.id !== null && String(item.id).trim() !== '') {
+      return `tx-id-${item.id}`;
+    }
+    if (item.rowNumber !== undefined && item.rowNumber !== null) {
+      return `tx-row-${item.rowNumber}`;
+    }
+    return `tx-fallback-${item.date}-${item.time}-${index}`;
+  }, []);
+
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: DateGroupedSection }) => {
+      const { title, badge } = formatDateHeader(section.date, todayKey, yesterdayKey);
+      return (
+        <View style={styles.sectionHeader}>
+          <View style={styles.sectionHeaderLeft}>
+            <Text style={[styles.sectionDateText, { color: colors.textSecondary }]}>
+              {title}
+            </Text>
+            {Boolean(badge) && (
+              <View
+                style={[
+                  styles.dayBadge,
+                  {
+                    backgroundColor: colors.primaryBg,
+                    borderColor: colors.primaryGlow,
+                  },
+                ]}
+              >
+                <Text style={[styles.dayBadgeText, { color: colors.primary }]}>
+                  {badge}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+      );
+    },
+    [
+      todayKey,
+      yesterdayKey,
+      colors.textSecondary,
+      colors.primaryBg,
+      colors.primaryGlow,
+      colors.primary,
+    ],
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: Transaction }) => (
+      <View style={styles.txItemWrapper}>
+        <TransactionCard
+          transaction={item}
+          baseCurrency={baseCurrency}
+          exchangeRates={exchangeRates}
+        />
+      </View>
+    ),
+    [baseCurrency, exchangeRates],
+  );
+
   return (
     <SafeAreaView
       edges={['top']}
       style={[styles.safeArea, { backgroundColor: colors.background }]}
     >
+      <CyberNeuralBackground />
       <SectionList<Transaction, DateGroupedSection>
+        style={styles.transparentBg}
         sections={sections}
-        keyExtractor={(item, index) => String(item.id ?? item.rowNumber ?? index)}
+        keyExtractor={keyExtractor}
+        initialNumToRender={12}
+        maxToRenderPerBatch={10}
+        windowSize={7}
         stickySectionHeadersEnabled={false}
         ListHeaderComponent={listHeader}
         contentContainerStyle={styles.listContainer}
@@ -513,40 +643,14 @@ export default function HomeScreen() {
             colors={[colors.primary]}
           />
         }
-        renderSectionHeader={({ section }) => {
-          const { title, badge } = formatDateHeader(section.date);
-          return (
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionHeaderLeft}>
-                <Text style={[styles.sectionDateText, { color: colors.textSecondary }]}>
-                  {title}
-                </Text>
-                {Boolean(badge) && (
-                  <View style={[styles.dayBadge, { backgroundColor: colors.primaryLight }]}>
-                    <Text style={[styles.dayBadgeText, { color: colors.primary }]}>
-                      {badge}
-                    </Text>
-                  </View>
-                )}
-              </View>
-            </View>
-          );
-        }}
-        renderItem={({ item }) => (
-          <View style={styles.txItemWrapper}>
-            <TransactionCard
-              transaction={item}
-              baseCurrency={baseCurrency}
-              exchangeRates={exchangeRates}
-            />
-          </View>
-        )}
+        renderSectionHeader={renderSectionHeader}
+        renderItem={renderItem}
         ListEmptyComponent={
           isLoading && !initialized ? (
             <View style={styles.emptyBox}>
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>
-                正在載入帳本資料...
+                載入帳務資料中...
               </Text>
             </View>
           ) : (
@@ -554,13 +658,14 @@ export default function HomeScreen() {
               style={[
                 styles.emptyCard,
                 {
-                  backgroundColor: colors.surface,
-                  borderColor: colors.border,
+                  backgroundColor: colors.card,
+                  borderColor: colors.accent,
                 },
               ]}
             >
+              <HudReticle variant="accent" />
               <Text style={[styles.emptyTitle, { color: colors.text }]}>
-                {hasActiveFilters ? '沒有符合篩選條件的交易' : '尚無記帳資料'}
+                {hasActiveFilters ? '查無符合條件的交易' : '尚無記帳資料'}
               </Text>
               <Text style={[styles.emptySubtitle, { color: colors.textMuted }]}>
                 {hasActiveFilters
@@ -572,16 +677,20 @@ export default function HomeScreen() {
                   onPress={handleReset}
                   style={[styles.emptyActionBtn, { backgroundColor: colors.primary }]}
                 >
-                  <RotateCcw size={15} color="#FFFFFF" />
-                  <Text style={styles.emptyActionText}>重置所有篩選</Text>
+                  <RotateCcw size={14} color={colors.onPrimary} />
+                  <Text style={[styles.emptyActionText, { color: colors.onPrimary }]}>
+                    清除所有篩選
+                  </Text>
                 </Pressable>
               ) : (
                 <Pressable
                   onPress={() => router.push('/quick-add')}
                   style={[styles.emptyActionBtn, { backgroundColor: colors.primary }]}
                 >
-                  <Plus size={15} color="#FFFFFF" />
-                  <Text style={styles.emptyActionText}>立即記一筆</Text>
+                  <Plus size={14} color={colors.onPrimary} />
+                  <Text style={[styles.emptyActionText, { color: colors.onPrimary }]}>
+                    立即記一筆
+                  </Text>
                 </Pressable>
               )}
             </View>
@@ -604,21 +713,30 @@ export default function HomeScreen() {
             style={[
               styles.pickerSheet,
               {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
+                backgroundColor: isDark
+                  ? 'rgba(10, 15, 30, 0.94)'
+                  : 'rgba(255, 255, 255, 0.96)',
+                borderColor: colors.primaryGlow,
               },
             ]}
             onPress={(e) => e.stopPropagation()}
           >
+            <HudReticle variant="primary" />
             <View style={styles.pickerHeader}>
               <Text style={[styles.pickerTitle, { color: colors.text }]}>
                 {pickerConfig?.title || '選擇篩選'}
               </Text>
               <Pressable
                 onPress={() => setActivePicker(null)}
-                style={[styles.pickerCloseBtn, { backgroundColor: colors.chipBg }]}
+                style={[
+                  styles.pickerCloseBtn,
+                  {
+                    backgroundColor: colors.chipBg,
+                    borderColor: colors.cardBorder,
+                  },
+                ]}
               >
-                <X size={18} color={colors.textSecondary} />
+                <X size={16} color={colors.textSecondary} />
               </Pressable>
             </View>
 
@@ -628,7 +746,7 @@ export default function HomeScreen() {
                   styles.segmentedTabsRow,
                   {
                     backgroundColor: colors.surfaceElevated,
-                    borderColor: colors.border,
+                    borderColor: colors.cardBorder,
                   },
                 ]}
               >
@@ -641,7 +759,7 @@ export default function HomeScreen() {
                       style={[
                         styles.segmentedTab,
                         isActive && {
-                          backgroundColor: colors.primaryLight,
+                          backgroundColor: colors.primaryBg,
                           borderColor: colors.primary,
                         },
                       ]}
@@ -681,9 +799,9 @@ export default function HomeScreen() {
                         styles.pickerOption,
                         {
                           backgroundColor: isSelected
-                            ? colors.primaryLight
+                            ? colors.primaryBg
                             : colors.surfaceElevated,
-                          borderColor: isSelected ? colors.primary : colors.border,
+                          borderColor: isSelected ? colors.primary : colors.cardBorder,
                         },
                         pressed && { opacity: 0.78 },
                       ]}
@@ -715,6 +833,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  transparentBg: {
+    backgroundColor: 'transparent',
+  },
   listContainer: {
     paddingHorizontal: 16,
     paddingBottom: 116,
@@ -722,6 +843,21 @@ const styles = StyleSheet.create({
   headerContent: {
     paddingTop: 8,
     gap: 14,
+  },
+  refreshErrorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+  },
+  refreshErrorText: {
+    flex: 1,
+    fontFamily: MONO_FONT,
+    fontSize: 12,
+    fontWeight: '700',
   },
   topBar: {
     flexDirection: 'row',
@@ -733,6 +869,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  titleAccent: {
+    width: 4,
+    height: 22,
+    borderRadius: 2,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 8,
+  },
   brandTitle: {
     fontSize: 22,
     fontWeight: '800',
@@ -742,18 +886,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
   },
   versionChipText: {
-    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 0.3,
   },
   themeBtn: {
     width: 38,
     height: 38,
-    borderRadius: 13,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -762,7 +909,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    borderRadius: 16,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     paddingHorizontal: 13,
     paddingVertical: Platform.OS === 'ios' ? 11 : 8,
@@ -781,15 +928,17 @@ const styles = StyleSheet.create({
   filterPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 6,
     borderWidth: 1,
   },
   filterPillText: {
-    fontSize: 12,
+    fontFamily: MONO_FONT,
+    fontSize: 11,
     fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
   timelineTitleRow: {
     flexDirection: 'row',
@@ -804,13 +953,10 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   timelineTitle: {
-    fontSize: 13,
+    fontFamily: MONO_FONT,
+    fontSize: 12,
     fontWeight: '700',
-  },
-  engelBadge: {
-    fontSize: 11,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
+    letterSpacing: 0.4,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -823,36 +969,24 @@ const styles = StyleSheet.create({
   sectionHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
   sectionDateText: {
-    fontSize: 13,
+    fontFamily: MONO_FONT,
+    fontSize: 12,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   dayBadge: {
     paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 999,
+    borderRadius: 4,
+    borderWidth: 1,
   },
   dayBadgeText: {
+    fontFamily: MONO_FONT,
     fontSize: 10,
     fontWeight: '800',
-  },
-  sectionSubtotals: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  dayIncomeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-  dayExpenseText: {
-    fontSize: 12,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
   },
   txItemWrapper: {
     marginBottom: 8,
@@ -864,16 +998,18 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   emptyCard: {
+    position: 'relative',
     marginTop: 20,
-    borderRadius: 20,
+    borderRadius: HUD_RADIUS_LG,
     borderWidth: 1,
     padding: 28,
     alignItems: 'center',
     gap: 8,
   },
   emptyTitle: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontFamily: MONO_FONT,
+    fontSize: 15,
+    fontWeight: '800',
   },
   emptySubtitle: {
     fontSize: 13,
@@ -886,22 +1022,23 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     marginTop: 8,
   },
   emptyActionText: {
-    color: '#FFFFFF',
+    fontFamily: MONO_FONT,
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.56)',
+    backgroundColor: 'rgba(2, 6, 23, 0.68)',
     justifyContent: 'flex-end',
   },
   pickerSheet: {
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
+    position: 'relative',
+    borderTopLeftRadius: HUD_RADIUS_LG,
+    borderTopRightRadius: HUD_RADIUS_LG,
     borderWidth: 1,
     borderBottomWidth: 0,
     padding: 20,
@@ -914,20 +1051,23 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   pickerTitle: {
-    fontSize: 17,
-    fontWeight: '700',
+    fontFamily: MONO_FONT,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   pickerCloseBtn: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   segmentedTabsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     padding: 4,
     gap: 4,
@@ -938,18 +1078,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 8,
-    borderRadius: 10,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: 'transparent',
   },
   segmentedTabText: {
-    fontSize: 13,
+    fontFamily: MONO_FONT,
+    fontSize: 12,
     fontWeight: '700',
   },
   pickerScroll: {
     maxHeight: 360,
   },
   pickerEmptyText: {
+    fontFamily: MONO_FONT,
     fontSize: 13,
     textAlign: 'center',
     paddingVertical: 24,
@@ -959,13 +1101,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderRadius: 14,
+    paddingVertical: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     marginBottom: 8,
   },
   pickerOptionText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontFamily: MONO_FONT,
+    fontSize: 13,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
 });

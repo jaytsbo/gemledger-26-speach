@@ -1,6 +1,29 @@
 import { Transaction } from '../types/ledger';
+import { normalizeCurrencyCode } from './currency';
+import { getLocalDateStr, normalizeDateStr, normalizeTimeStr } from './dateTime';
 
 export type TransactionDraft = Omit<Transaction, 'id' | 'rowNumber'>;
+
+function decodeUtf16Bytes(bytes: Uint8Array, littleEndian: boolean): string {
+  const encoding = littleEndian ? 'utf-16le' : 'utf-16be';
+  try {
+    if (typeof TextDecoder !== 'undefined') {
+      return new TextDecoder(encoding).decode(bytes);
+    }
+  } catch {
+    // Hermes / restricted runtimes may throw RangeError for utf-16 encodings
+  }
+
+  let out = '';
+  const evenLen = bytes.length - (bytes.length % 2);
+  for (let i = 0; i < evenLen; i += 2) {
+    const codeUnit = littleEndian
+      ? bytes[i] | (bytes[i + 1] << 8)
+      : (bytes[i] << 8) | bytes[i + 1];
+    out += String.fromCharCode(codeUnit);
+  }
+  return out;
+}
 
 type ColumnKey = 'date' | 'time' | 'account' | 'name' | 'category' | 'currency' | 'amount' | 'note';
 
@@ -59,10 +82,10 @@ export function decodeCsvBytes(bytes: Uint8Array): string {
     return new TextDecoder('utf-8').decode(bytes.subarray(3));
   }
   if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
-    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+    return decodeUtf16Bytes(bytes.subarray(2), true);
   }
   if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
-    return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+    return decodeUtf16Bytes(bytes.subarray(2), false);
   }
 
   const utf8Text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
@@ -102,25 +125,11 @@ function resolveColumnIndices(headers: string[]): Partial<Record<ColumnKey, numb
 }
 
 function normalizeDate(raw?: string): string {
-  const trimmed = (raw || '').trim();
-  if (!trimmed) {
-    return new Date().toISOString().slice(0, 10);
-  }
-  const slashMatch = trimmed.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})/);
-  if (slashMatch) {
-    const [, y, m, d] = slashMatch;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-  return trimmed.slice(0, 10);
+  return normalizeDateStr(raw, getLocalDateStr());
 }
 
 function normalizeTime(raw?: string): string {
-  const trimmed = (raw || '').trim();
-  const match = trimmed.match(/^(\d{1,2}):(\d{2})/);
-  if (match) {
-    return `${match[1].padStart(2, '0')}:${match[2]}`;
-  }
-  return '00:00';
+  return normalizeTimeStr(raw, '00:00');
 }
 
 function parseAmount(raw?: string): number | null {
@@ -249,7 +258,7 @@ export function mapRowsToTransactions(rows: string[][]): TransactionDraft[] {
 
     const amount = parseAmount(getCell('amount'));
     const name = getCell('name');
-    if (amount === null && !name) {
+    if (amount === null && (!name || colMap.amount !== undefined)) {
       continue;
     }
 
@@ -259,7 +268,7 @@ export function mapRowsToTransactions(rows: string[][]): TransactionDraft[] {
       account: getCell('account') || '現金',
       name: name || '未命名項目',
       category: getCell('category') || '其他',
-      currency: (getCell('currency') || 'TWD').toUpperCase(),
+      currency: normalizeCurrencyCode(getCell('currency'), 'TWD'),
       amount: amount ?? 0,
       note: getCell('note'),
     });
@@ -267,25 +276,6 @@ export function mapRowsToTransactions(rows: string[][]): TransactionDraft[] {
 
   console.log(`[csvImport/mapRowsToTransactions] Done - parsed=${drafts.length} drafts`);
   return drafts;
-}
-
-/**
- * Extract Google Spreadsheet ID from either a full Google Sheets URL or a raw spreadsheet ID.
- */
-export function extractSpreadsheetId(urlOrId: string): string | null {
-  const trimmed = (urlOrId || '').trim();
-  if (!trimmed) return null;
-
-  const urlMatch = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  if (urlMatch?.[1]) {
-    return urlMatch[1];
-  }
-
-  if (/^[a-zA-Z0-9-_]{15,}$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  return null;
 }
 
 /**

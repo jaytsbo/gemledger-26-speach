@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useColorScheme } from 'react-native';
 import { useLedgerStore } from '../store/useLedgerStore';
 import { DARK_COLORS, LIGHT_COLORS, ThemeColors, ThemeMode } from './colors';
@@ -14,9 +14,9 @@ export interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  mode: 'system',
-  isDark: false,
-  colors: LIGHT_COLORS,
+  mode: 'dark',
+  isDark: true,
+  colors: DARK_COLORS,
   setMode: () => {},
   toggleTheme: () => {},
 });
@@ -48,7 +48,9 @@ function writeStoredThemeMode(mode: ThemeMode): void {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const systemScheme = useColorScheme();
   const storeThemeMode = useLedgerStore((s) => s.settings.themeMode);
-  const [mode, setModeState] = useState<ThemeMode>('system');
+  const storeInitialized = useLedgerStore((s) => s.initialized);
+  const [mode, setModeState] = useState<ThemeMode>('dark');
+  const pendingThemeRef = useRef<ThemeMode | null>(null);
 
   useEffect(() => {
     const saved = readStoredThemeMode();
@@ -59,6 +61,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (pendingThemeRef.current) return;
     if (
       !readStoredThemeMode() &&
       (storeThemeMode === 'light' || storeThemeMode === 'dark' || storeThemeMode === 'system')
@@ -68,12 +71,29 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [storeThemeMode]);
 
+  useEffect(() => {
+    if (!storeInitialized || !pendingThemeRef.current) return;
+    const pendingMode = pendingThemeRef.current;
+    pendingThemeRef.current = null;
+    console.log(`[ThemeContext/flushPending] Persist - Mode:${pendingMode}`);
+    useLedgerStore
+      .getState()
+      .updateSettings({ themeMode: pendingMode })
+      .catch(() => {});
+  }, [storeInitialized]);
+
   const setMode = (nextMode: ThemeMode) => {
     console.log(`[ThemeContext/setMode] Update - Mode:${nextMode}`);
     setModeState(nextMode);
     writeStoredThemeMode(nextMode);
-    useLedgerStore
-      .getState()
+    const store = useLedgerStore.getState();
+    if (!store.initialized) {
+      pendingThemeRef.current = nextMode;
+      console.log(`[ThemeContext/setMode] Deferred - Waiting for store initialization, Mode:${nextMode}`);
+      return;
+    }
+    pendingThemeRef.current = null;
+    store
       .updateSettings({ themeMode: nextMode })
       .catch(() => {});
   };

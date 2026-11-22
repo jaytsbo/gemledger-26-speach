@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -6,14 +6,17 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Check, RefreshCw } from 'lucide-react-native';
+import { AlertTriangle, Check, CheckCircle2, RefreshCw } from 'lucide-react-native';
+import { HudReticle, MONO_FONT } from '@/components/ui/HudReticle';
 import { useLedgerStore } from '@/store/useLedgerStore';
+import { HUD_RADIUS } from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { CurrencyCode, SUPPORTED_CURRENCIES } from '@/types/ledger';
 import {
   convertCurrency,
   CURRENCY_LABELS,
   CURRENCY_SYMBOLS,
+  DEFAULT_EXCHANGE_RATES,
 } from '@/utils/currency';
 import { SettingsModalFrame } from './SettingsModalFrame';
 import { FeedbackState, formatFxTimestamp } from './settingsHelpers';
@@ -36,6 +39,18 @@ export function CurrencyFxModal({
   const setBaseCurrency = useLedgerStore((s) => s.setBaseCurrency);
   const syncExchangeRates = useLedgerStore((s) => s.syncExchangeRates);
 
+  const [isBusy, setIsBusy] = useState(false);
+  const [inlineFeedback, setInlineFeedback] = useState<FeedbackState | null>(null);
+  const isBusyRef = useRef(false);
+
+  useEffect(() => {
+    if (!visible) {
+      setInlineFeedback(null);
+      isBusyRef.current = false;
+      setIsBusy(false);
+    }
+  }, [visible]);
+
   const fxPreviewList = useMemo(() => {
     const targets: CurrencyCode[] = (['USD', 'JPY', 'EUR'] as CurrencyCode[]).filter(
       (c) => c !== baseCurrency,
@@ -47,44 +62,105 @@ export function CurrencyFxModal({
   }, [baseCurrency, exchangeRates]);
 
   const handleSelectCurrency = async (cur: CurrencyCode) => {
+    if (isBusyRef.current || isSyncingFX) return;
+    isBusyRef.current = true;
+    setIsBusy(true);
+    setInlineFeedback(null);
     console.log(`[Settings/CurrencyFxModal] SelectBaseCurrency - ${cur}`);
     try {
       await setBaseCurrency(cur);
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'success',
         message: `已將預設本位幣切換為 ${cur}（${CURRENCY_LABELS[cur]}）`,
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'error',
         message: err instanceof Error ? err.message : '切換幣別失敗',
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
+    } finally {
+      isBusyRef.current = false;
+      setIsBusy(false);
     }
   };
 
   const handleSyncFX = async () => {
+    if (isBusyRef.current || isSyncingFX) return;
+    isBusyRef.current = true;
+    setIsBusy(true);
+    setInlineFeedback(null);
     console.log('[Settings/CurrencyFxModal] SyncFX - Requesting live exchange rates');
     try {
       const res = await syncExchangeRates();
-      onFeedback({
-        type: 'success',
-        message: `即時匯率已更新（${formatFxTimestamp(res.updated)}）`,
-      });
+      const isStaticFallback = res.updated === DEFAULT_EXCHANGE_RATES.updated;
+      const fb: FeedbackState = isStaticFallback
+        ? {
+            type: 'error',
+            message: '無法連線即時匯率服務，目前沿用內建離線預設匯率',
+          }
+        : {
+            type: 'success',
+            message: `即時匯率已更新（${formatFxTimestamp(res.updated)}）`,
+          };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'error',
         message: err instanceof Error ? err.message : '匯率同步失敗',
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
+    } finally {
+      isBusyRef.current = false;
+      setIsBusy(false);
     }
   };
+
+  const actionLocked = isBusy || isSyncingFX;
 
   return (
     <SettingsModalFrame
       visible={visible}
-      title="預設本位幣別與匯率"
+      title="匯率與幣別"
       subtitle={`最後更新：${formatFxTimestamp(exchangeRates.updated)}`}
       onClose={onClose}
     >
+      {inlineFeedback ? (
+        <View
+          style={[
+            styles.feedbackBox,
+            {
+              backgroundColor:
+                inlineFeedback.type === 'success' ? colors.incomeBg : colors.expenseBg,
+              borderColor:
+                inlineFeedback.type === 'success' ? colors.income : colors.expense,
+            },
+          ]}
+        >
+          {inlineFeedback.type === 'success' ? (
+            <CheckCircle2 size={15} color={colors.income} />
+          ) : (
+            <AlertTriangle size={15} color={colors.expense} />
+          )}
+          <Text
+            style={[
+              styles.feedbackText,
+              {
+                color:
+                  inlineFeedback.type === 'success' ? colors.income : colors.expense,
+              },
+            ]}
+          >
+            {inlineFeedback.message}
+          </Text>
+        </View>
+      ) : null}
+
       {/* Sync Button & Rate Preview */}
       <View
         style={[
@@ -95,9 +171,10 @@ export function CurrencyFxModal({
           },
         ]}
       >
+        <HudReticle variant="primary" size={7} inset={1} />
         <View style={styles.fxHeaderRow}>
           <View>
-            <Text style={[styles.sectionLabel, { color: colors.text }]}>
+            <Text style={[styles.sectionLabel, { color: colors.primary }]}>
               即時匯率預覽
             </Text>
             <Text style={[styles.fxTimestamp, { color: colors.textMuted }]}>
@@ -106,18 +183,22 @@ export function CurrencyFxModal({
           </View>
           <Pressable
             onPress={handleSyncFX}
-            disabled={isSyncingFX}
+            disabled={actionLocked}
             style={[
               styles.syncBtn,
-              { backgroundColor: colors.primary, opacity: isSyncingFX ? 0.7 : 1 },
+              {
+                backgroundColor: colors.primary,
+                borderColor: colors.primary,
+                opacity: actionLocked ? 0.7 : 1,
+              },
             ]}
           >
             {isSyncingFX ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={colors.onPrimary} />
             ) : (
-              <RefreshCw size={14} color="#FFFFFF" />
+              <RefreshCw size={14} color={colors.onPrimary} />
             )}
-            <Text style={styles.syncBtnText}>
+            <Text style={[styles.syncBtnText, { color: colors.onPrimary }]}>
               {isSyncingFX ? '同步中...' : '同步匯率'}
             </Text>
           </Pressable>
@@ -127,7 +208,10 @@ export function CurrencyFxModal({
           {fxPreviewList.map((line) => (
             <View
               key={line}
-              style={[styles.previewPill, { backgroundColor: colors.chipBg }]}
+              style={[
+                styles.previewPill,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+              ]}
             >
               <Text style={[styles.previewText, { color: colors.textSecondary }]}>
                 {line}
@@ -139,7 +223,7 @@ export function CurrencyFxModal({
 
       {/* Currency Selector */}
       <View style={styles.currencySection}>
-        <Text style={[styles.sectionLabel, { color: colors.text }]}>
+        <Text style={[styles.sectionLabel, { color: colors.primary }]}>
           選擇本位幣別
         </Text>
         <View style={styles.currencyList}>
@@ -148,14 +232,16 @@ export function CurrencyFxModal({
             return (
               <Pressable
                 key={cur}
+                disabled={actionLocked}
                 onPress={() => handleSelectCurrency(cur)}
                 style={[
                   styles.currencyRow,
                   {
                     backgroundColor: active
-                      ? colors.primaryLight
+                      ? colors.primaryBg
                       : colors.surfaceElevated,
                     borderColor: active ? colors.primary : colors.border,
+                    opacity: actionLocked && !active ? 0.65 : 1,
                   },
                 ]}
               >
@@ -165,13 +251,14 @@ export function CurrencyFxModal({
                       styles.symbolBadge,
                       {
                         backgroundColor: active ? colors.primary : colors.chipBg,
+                        borderColor: active ? colors.primary : colors.border,
                       },
                     ]}
                   >
                     <Text
                       style={[
                         styles.symbolText,
-                        { color: active ? '#FFFFFF' : colors.text },
+                        { color: active ? colors.onPrimary : colors.text },
                       ]}
                     >
                       {CURRENCY_SYMBOLS[cur]}
@@ -203,7 +290,8 @@ export function CurrencyFxModal({
 
 const styles = StyleSheet.create({
   fxBox: {
-    borderRadius: 16,
+    position: 'relative',
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     padding: 14,
     gap: 12,
@@ -215,12 +303,15 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sectionLabel: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.5,
   },
   fxTimestamp: {
-    fontSize: 12,
+    fontSize: 11,
     marginTop: 2,
+    fontFamily: MONO_FONT,
     fontVariant: ['tabular-nums'],
   },
   syncBtn: {
@@ -229,12 +320,13 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 10,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
   },
   syncBtnText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 12,
+    fontWeight: '800',
+    fontFamily: MONO_FONT,
   },
   previewList: {
     flexDirection: 'row',
@@ -242,13 +334,15 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   previewPill: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 6,
-    borderRadius: 999,
+    borderRadius: 6,
+    borderWidth: 1,
   },
   previewText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
+    fontFamily: MONO_FONT,
     fontVariant: ['tabular-nums'],
   },
   currencySection: {
@@ -263,7 +357,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 14,
     paddingVertical: 11,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   currencyLeft: {
@@ -274,20 +368,39 @@ const styles = StyleSheet.create({
   symbolBadge: {
     width: 34,
     height: 34,
-    borderRadius: 10,
+    borderRadius: 6,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   symbolText: {
     fontSize: 13,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
   },
   currencyCode: {
     fontSize: 15,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.4,
   },
   currencyName: {
     fontSize: 12,
     marginTop: 1,
+  },
+  feedbackBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+  },
+  feedbackText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
   },
 });

@@ -1,4 +1,6 @@
 import {
+  AiChatMessage,
+  AIParsedDraft,
   ApiActionResult,
   CurrencyCode,
   CustomSettings,
@@ -7,13 +9,27 @@ import {
   Transaction,
   TransactionInput,
 } from '../types/ledger';
-import { DEFAULT_EXCHANGE_RATES } from '../utils/currency';
+import {
+  DEFAULT_EXCHANGE_RATES,
+  normalizeCurrencyCode,
+  sanitizeRatesMap,
+} from '../utils/currency';
+import {
+  compareIdsDesc,
+  getLocalDateOffset,
+  getLocalDateStr,
+  getLocalTimeStr,
+} from '../utils/dateTime';
 
 export const MOCK_STORAGE_KEYS = {
   SHEET_DATA: 'MOCK_SHEET_DATA',
   CUSTOM_SETTINGS: 'MOCK_CUSTOM_SETTINGS',
   FX_CACHE: 'GEMLEDGER_EXCHANGE_RATES_CACHE',
+  AI_CHAT_HISTORY: 'GEMLEDGER_AI_CHAT_HISTORY',
 } as const;
+
+export const MAX_AI_CHAT_MESSAGES = 60;
+const SQLITE_AI_CHAT_KEY = 'ai_chat_history';
 
 export const DEFAULT_ACCOUNTS = [
   '現金',
@@ -49,25 +65,17 @@ export const DEFAULT_SETTINGS: CustomSettings = {
   categories: [...DEFAULT_CATEGORIES],
   currencies: [...SUPPORTED_CURRENCIES] as CurrencyCode[],
   baseCurrency: 'TWD',
-  aiProxyUrl: '',
   simulate503: false,
-  themeMode: 'system',
+  themeMode: 'dark',
 };
 
-function formatDateOffset(daysAgo: number): string {
-  const dt = new Date();
-  dt.setDate(dt.getDate() - daysAgo);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-}
-
 export function getDefaultSeedTransactions(): Transaction[] {
-  const d0 = formatDateOffset(0);
-  const d1 = formatDateOffset(1);
-  const d2 = formatDateOffset(2);
-  const d3 = formatDateOffset(3);
-  const d4 = formatDateOffset(4);
-  const d5 = formatDateOffset(5);
+  const d0 = getLocalDateOffset(0);
+  const d1 = getLocalDateOffset(-1);
+  const d2 = getLocalDateOffset(-2);
+  const d3 = getLocalDateOffset(-3);
+  const d4 = getLocalDateOffset(-4);
+  const d5 = getLocalDateOffset(-5);
 
   return [
     {
@@ -258,6 +266,175 @@ function isNativeMobileRuntime(): boolean {
   return true;
 }
 
+function cleanUniqueStrings(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  return Array.from(
+    new Set(
+      list
+        .filter((v): v is string => typeof v === 'string')
+        .map((v) => v.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function normalizeLoadedSettings(parsed: Partial<CustomSettings> | null | undefined): CustomSettings | null {
+  if (!parsed || !Array.isArray(parsed.accounts) || !Array.isArray(parsed.categories)) {
+    return null;
+  }
+  const accounts = cleanUniqueStrings(parsed.accounts);
+  const categories = cleanUniqueStrings(parsed.categories);
+  if (accounts.length === 0 || categories.length === 0) {
+    return null;
+  }
+  const currencies = cleanUniqueStrings(parsed.currencies).map((c) => c.toUpperCase());
+  const baseCurrency = normalizeCurrencyCode(parsed.baseCurrency, DEFAULT_SETTINGS.baseCurrency) as CurrencyCode;
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...parsed,
+    accounts,
+    categories,
+    currencies: (currencies.length > 0 ? currencies : DEFAULT_SETTINGS.currencies) as CurrencyCode[],
+    baseCurrency,
+  };
+}
+
+function sanitizeLoadedTransaction(raw: Transaction): Transaction {
+  const rawAmt = Number(raw?.amount);
+  const safeAmt = Number.isFinite(rawAmt) ? (Object.is(rawAmt, -0) ? 0 : rawAmt) : 0;
+  return {
+    ...raw,
+    date: typeof raw?.date === 'string' ? raw.date.trim() : getLocalDateStr(),
+    time: typeof raw?.time === 'string' ? raw.time.trim() : '00:00',
+    account: typeof raw?.account === 'string' && raw.account.trim() ? raw.account.trim() : '現金',
+    name: typeof raw?.name === 'string' && raw.name.trim() ? raw.name.trim() : '未命名項目',
+    category: typeof raw?.category === 'string' && raw.category.trim() ? raw.category.trim() : '食',
+    currency: normalizeCurrencyCode(raw?.currency, 'TWD'),
+    amount: safeAmt,
+    note: typeof raw?.note === 'string' ? raw.note : '',
+  };
+}
+
+function sortTransactionsDesc(list: Transaction[]): Transaction[] {
+  return [...list].sort((a, b) => {
+    const dateCmp = (b.date || '').localeCompare(a.date || '');
+    if (dateCmp !== 0) return dateCmp;
+    const timeCmp = (b.time || '').localeCompare(a.time || '');
+    if (timeCmp !== 0) return timeCmp;
+    return compareIdsDesc(a.id, b.id);
+  });
+}
+
+function getNextLocalIdStart(existing: Transaction[]): number {
+  let maxId = 0;
+  for (const tx of existing) {
+    const n = Number(tx.id);
+    if (Number.isFinite(n) && n > maxId) {
+      maxId = n;
+    }
+  }
+  return Math.max(Date.now(), maxId + 1);
+}
+
+function sanitizeAiDraft(raw: unknown): AIParsedDraft | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const obj = raw as Record<string, unknown>;
+  if (
+    typeof obj.name !== 'string' ||
+    typeof obj.amount !== 'number' ||
+    !Number.isFinite(obj.amount) ||
+    typeof obj.currency !== 'string' ||
+    typeof obj.category !== 'string' ||
+    typeof obj.account !== 'string' ||
+    typeof obj.date !== 'string' ||
+    typeof obj.time !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    name: obj.name,
+    amount: Object.is(obj.amount, -0) ? 0 : obj.amount,
+    currency: obj.currency.trim() || 'TWD',
+    category: obj.category,
+    account: obj.account,
+    date: obj.date,
+    time: obj.time,
+    note: typeof obj.note === 'string' ? obj.note : '',
+  };
+}
+
+function sanitizeAiChatMessage(raw: unknown): AiChatMessage | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const obj = raw as Record<string, unknown>;
+  if (
+    typeof obj.id !== 'string' ||
+    !obj.id.trim() ||
+    (obj.role !== 'user' && obj.role !== 'assistant') ||
+    typeof obj.text !== 'string'
+  ) {
+    return null;
+  }
+
+  // Strip imageUri intentionally: local file/blob URIs expire across restarts
+  const clean: AiChatMessage = {
+    id: obj.id.trim(),
+    role: obj.role,
+    text: obj.text,
+  };
+
+  if (
+    typeof obj.audioDurationSec === 'number' &&
+    Number.isFinite(obj.audioDurationSec) &&
+    obj.audioDurationSec >= 0
+  ) {
+    clean.audioDurationSec = obj.audioDurationSec;
+  }
+  if (Array.isArray(obj.drafts)) {
+    const cleanDrafts = obj.drafts
+      .map(sanitizeAiDraft)
+      .filter((d): d is AIParsedDraft => d !== null);
+    if (cleanDrafts.length > 0 || obj.drafts.length === 0) {
+      clean.drafts = cleanDrafts;
+    }
+  }
+  if (Array.isArray(obj.savedIndices)) {
+    clean.savedIndices = Array.from(
+      new Set(
+        obj.savedIndices.filter(
+          (n): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0,
+        ),
+      ),
+    );
+  }
+  if (typeof obj.isFallback === 'boolean') {
+    clean.isFallback = obj.isFallback;
+  }
+  if (typeof obj.fallbackReason === 'string') {
+    clean.fallbackReason = obj.fallbackReason;
+  }
+  if (typeof obj.modelUsed === 'string') {
+    clean.modelUsed = obj.modelUsed;
+  }
+  if (typeof obj.createdAt === 'string') {
+    clean.createdAt = obj.createdAt;
+  }
+
+  return clean;
+}
+
+export function sanitizeAiChatMessages(raw: unknown): AiChatMessage[] {
+  if (!Array.isArray(raw)) return [];
+  const valid = raw
+    .map(sanitizeAiChatMessage)
+    .filter((msg): msg is AiChatMessage => msg !== null);
+  return valid.length > MAX_AI_CHAT_MESSAGES ? valid.slice(-MAX_AI_CHAT_MESSAGES) : valid;
+}
+
 // =========================================================================
 // Web / Node LocalStorage Backend
 // =========================================================================
@@ -269,15 +446,8 @@ const LocalStorageBackend = {
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as Partial<CustomSettings>;
-        if (parsed && Array.isArray(parsed.accounts) && Array.isArray(parsed.categories)) {
-          return {
-            ...DEFAULT_SETTINGS,
-            ...parsed,
-            currencies: (parsed.currencies?.length
-              ? parsed.currencies
-              : DEFAULT_SETTINGS.currencies) as CurrencyCode[],
-          };
-        }
+        const normalized = normalizeLoadedSettings(parsed);
+        if (normalized) return normalized;
       } catch {
         // Re-seed if corrupted
       }
@@ -299,7 +469,7 @@ const LocalStorageBackend = {
       try {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return parsed;
+          return sortTransactionsDesc(parsed.map((item) => sanitizeLoadedTransaction(item)));
         }
       } catch {
         // Re-seed if corrupted
@@ -307,7 +477,7 @@ const LocalStorageBackend = {
     }
     const seeded = getDefaultSeedTransactions();
     storage.setItem(MOCK_STORAGE_KEYS.SHEET_DATA, JSON.stringify(seeded));
-    return seeded;
+    return sortTransactionsDesc(seeded);
   },
 
   saveTransactions(data: Transaction[]): void {
@@ -321,7 +491,14 @@ const LocalStorageBackend = {
     if (!raw) return null;
     try {
       const parsed = JSON.parse(raw) as ExchangeRates;
-      if (parsed && parsed.rates) return parsed;
+      const cleanRates = sanitizeRatesMap(parsed?.rates);
+      if (parsed && cleanRates) {
+        return {
+          base: typeof parsed.base === 'string' && parsed.base.trim() ? parsed.base.trim() : 'TWD',
+          updated: typeof parsed.updated === 'string' ? parsed.updated : DEFAULT_EXCHANGE_RATES.updated,
+          rates: cleanRates,
+        };
+      }
     } catch {
       return null;
     }
@@ -331,6 +508,36 @@ const LocalStorageBackend = {
   saveCachedFX(rates: ExchangeRates): void {
     const storage = getWebStorage();
     storage.setItem(MOCK_STORAGE_KEYS.FX_CACHE, JSON.stringify(rates));
+  },
+
+  getAiChatHistory(): AiChatMessage[] {
+    const storage = getWebStorage();
+    const raw = storage.getItem(MOCK_STORAGE_KEYS.AI_CHAT_HISTORY);
+    if (!raw) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return sanitizeAiChatMessages(parsed);
+    } catch (err) {
+      console.warn(
+        '[Database/LocalStorageBackend.getAiChatHistory] ParseFailed - Returning empty list:',
+        err instanceof Error ? err.message : 'unknown',
+      );
+      return [];
+    }
+  },
+
+  saveAiChatHistory(messages: AiChatMessage[]): void {
+    const storage = getWebStorage();
+    storage.setItem(MOCK_STORAGE_KEYS.AI_CHAT_HISTORY, JSON.stringify(messages));
+  },
+
+  clearAiChatHistory(): void {
+    const storage = getWebStorage();
+    if (typeof storage.removeItem === 'function') {
+      storage.removeItem(MOCK_STORAGE_KEYS.AI_CHAT_HISTORY);
+    } else {
+      storage.setItem(MOCK_STORAGE_KEYS.AI_CHAT_HISTORY, '[]');
+    }
   },
 };
 
@@ -345,41 +552,50 @@ let sqliteDbPromise: Promise<SQLiteDatabase> | null = null;
 async function getSqliteDb(): Promise<SQLiteDatabase> {
   if (!sqliteDbPromise) {
     sqliteDbPromise = (async () => {
-      const SQLite = await import('expo-sqlite');
-      const db = await SQLite.openDatabaseAsync('gemledger.db');
-      await db.execAsync(`
-        PRAGMA journal_mode = WAL;
-        CREATE TABLE IF NOT EXISTS transactions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          row_number INTEGER,
-          date TEXT NOT NULL,
-          time TEXT NOT NULL,
-          account TEXT NOT NULL,
-          name TEXT NOT NULL,
-          category TEXT NOT NULL,
-          currency TEXT NOT NULL,
-          amount REAL NOT NULL,
-          note TEXT DEFAULT '',
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      try {
+        const SQLite = await import('expo-sqlite');
+        const db = await SQLite.openDatabaseAsync('gemledger.db');
+        await db.execAsync(`
+          PRAGMA journal_mode = WAL;
+          CREATE TABLE IF NOT EXISTS transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            row_number INTEGER,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            account TEXT NOT NULL,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            amount REAL NOT NULL,
+            note TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
+          CREATE INDEX IF NOT EXISTS idx_tx_account ON transactions(account);
+          CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category);
+          CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE IF NOT EXISTS fx_cache (
+            base TEXT PRIMARY KEY,
+            rates_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+        `);
+        await ensureSqliteSeeded(db);
+        console.log('[Database/getSqliteDb] Initialized - SQLite tables ready');
+        return db;
+      } catch (err) {
+        sqliteDbPromise = null;
+        console.warn(
+          '[Database/getSqliteDb] InitFailed - Resetting sqliteDbPromise:',
+          err instanceof Error ? err.message : 'unknown',
         );
-        CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
-        CREATE INDEX IF NOT EXISTS idx_tx_account ON transactions(account);
-        CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category);
-        CREATE TABLE IF NOT EXISTS settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS fx_cache (
-          base TEXT PRIMARY KEY,
-          rates_json TEXT NOT NULL,
-          updated_at TEXT NOT NULL
-        );
-      `);
-      await ensureSqliteSeeded(db);
-      console.log('[Database/getSqliteDb] Initialized - SQLite tables ready');
-      return db;
+        throw err;
+      }
     })();
   }
   return sqliteDbPromise;
@@ -442,6 +658,8 @@ interface SqliteTxRow {
 }
 
 function mapSqliteRowToTx(row: SqliteTxRow): Transaction {
+  const rawAmt = Number(row.amount);
+  const safeAmt = Number.isFinite(rawAmt) ? (Object.is(rawAmt, -0) ? 0 : rawAmt) : 0;
   return {
     id: row.id,
     rowNumber: row.row_number ?? row.id + 1,
@@ -450,8 +668,8 @@ function mapSqliteRowToTx(row: SqliteTxRow): Transaction {
     account: row.account,
     name: row.name,
     category: row.category,
-    currency: row.currency,
-    amount: Number(row.amount) || 0,
+    currency: normalizeCurrencyCode(row.currency, 'TWD'),
+    amount: safeAmt,
     note: row.note || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -463,30 +681,49 @@ function mapSqliteRowToTx(row: SqliteTxRow): Transaction {
 // =========================================================================
 
 function normalizeInput(item: TransactionInput): Required<TransactionInput> {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const defaultDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const defaultTime = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const defaultDate = getLocalDateStr();
+  const defaultTime = getLocalTimeStr();
+
+  const cleanDate = typeof item.date === 'string' ? item.date.trim() : '';
+  const cleanTime = typeof item.time === 'string' ? item.time.trim() : '';
+  const cleanAccount = typeof item.account === 'string' ? item.account.trim() : '';
+  const cleanName = typeof item.name === 'string' ? item.name.trim() : '';
+  const cleanCategory = typeof item.category === 'string' ? item.category.trim() : '';
+  const cleanNote = typeof item.note === 'string' ? item.note.trim() : '';
+
+  const rawAmount = Number(item.amount);
+  const safeAmount = Number.isFinite(rawAmount) ? (Object.is(rawAmount, -0) ? 0 : rawAmount) : 0;
 
   return {
-    date: String(item.date || defaultDate).trim(),
-    time: String(item.time || defaultTime).trim(),
-    account: String(item.account || '現金').trim(),
-    name: String(item.name || '未命名項目').trim(),
-    category: String(item.category || '食').trim(),
-    currency: String(item.currency || 'TWD').trim().toUpperCase(),
-    amount: Number(item.amount) || 0,
-    note: String(item.note || '').trim(),
+    date: cleanDate || defaultDate,
+    time: cleanTime || defaultTime,
+    account: cleanAccount || '現金',
+    name: cleanName || '未命名項目',
+    category: cleanCategory || '食',
+    currency: normalizeCurrencyCode(item.currency, 'TWD'),
+    amount: safeAmount,
+    note: cleanNote,
   };
 }
 
 /**
- * 優先精確比對 id，找不到時才退回比對 rowNumber，避免 id=2 與 rowNumber=2 碰撞誤傷他筆資料。
+ * 優先精確比對 id；僅在舊資料無 id 時才允許退回比對 rowNumber，
+ * 避免刪除 id=2 後因重複送出而誤刪改 rowNumber=2 的鄰筆資料 (id=1)。
  */
 function findTxIndexByIdOrRow(data: Transaction[], idOrRow: number | string): number {
-  const target = String(idOrRow);
-  const byId = data.findIndex((d) => String(d.id) === target);
-  return byId !== -1 ? byId : data.findIndex((d) => String(d.rowNumber) === target);
+  const target = String(idOrRow).trim();
+  if (!target) return -1;
+  const byId = data.findIndex(
+    (d) => d.id !== undefined && d.id !== null && String(d.id).trim() !== '' && String(d.id) === target,
+  );
+  if (byId !== -1) return byId;
+  return data.findIndex(
+    (d) =>
+      (d.id === undefined || d.id === null || String(d.id).trim() === '') &&
+      d.rowNumber !== undefined &&
+      d.rowNumber !== null &&
+      String(d.rowNumber) === target,
+  );
 }
 
 export const Database = {
@@ -507,7 +744,7 @@ export const Database = {
       const data = LocalStorageBackend.getTransactions();
       const newRowNumber =
         data.length > 0 ? Math.max(...data.map((d) => Number(d.rowNumber) || 0)) + 1 : 2;
-      const newId = Date.now() + Math.floor(Math.random() * 1000);
+      const newId = getNextLocalIdStart(data);
       const newTx: Transaction = {
         id: newId,
         rowNumber: newRowNumber,
@@ -551,9 +788,9 @@ export const Database = {
   async batchAddTransactions(items: TransactionInput[]): Promise<ApiActionResult> {
     if (!isNativeMobileRuntime()) {
       const data = LocalStorageBackend.getTransactions();
-      let startRow =
+      const startRow =
         data.length > 0 ? Math.max(...data.map((d) => Number(d.rowNumber) || 0)) + 1 : 2;
-      const baseId = Date.now();
+      const baseId = getNextLocalIdStart(data);
       items.forEach((raw, idx) => {
         const clean = normalizeInput(raw);
         data.push({
@@ -570,7 +807,7 @@ export const Database = {
     await db.withTransactionAsync(async () => {
       for (const raw of items) {
         const clean = normalizeInput(raw);
-        const res = await db.runAsync(
+        await db.runAsync(
           `INSERT INTO transactions (date, time, account, name, category, currency, amount, note)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
@@ -584,11 +821,8 @@ export const Database = {
             clean.note,
           ],
         );
-        await db.runAsync('UPDATE transactions SET row_number = ? WHERE id = ?', [
-          res.lastInsertRowId + 1,
-          res.lastInsertRowId,
-        ]);
       }
+      await db.runAsync('UPDATE transactions SET row_number = id + 1 WHERE row_number IS NULL');
     });
     return { success: true, count: items.length, message: `成功批次寫入 ${items.length} 筆紀錄！` };
   },
@@ -614,25 +848,28 @@ export const Database = {
       return { success: true, message: '成功更新紀錄！' };
     }
 
-    const db = await getSqliteDb();
     const numericId = Number(idOrRow);
-    const baseSql = `UPDATE transactions
-       SET date = ?, time = ?, account = ?, name = ?, category = ?, currency = ?, amount = ?, note = ?, updated_at = CURRENT_TIMESTAMP`;
-    const baseParams = [
-      clean.date,
-      clean.time,
-      clean.account,
-      clean.name,
-      clean.category,
-      clean.currency,
-      clean.amount,
-      clean.note,
-      numericId,
-    ];
-    let res = await db.runAsync(`${baseSql} WHERE id = ?`, baseParams);
-    if (res.changes === 0) {
-      res = await db.runAsync(`${baseSql} WHERE row_number = ?`, baseParams);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      throw new Error('找不到該筆交易紀錄');
     }
+
+    const db = await getSqliteDb();
+    const res = await db.runAsync(
+      `UPDATE transactions
+       SET date = ?, time = ?, account = ?, name = ?, category = ?, currency = ?, amount = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [
+        clean.date,
+        clean.time,
+        clean.account,
+        clean.name,
+        clean.category,
+        clean.currency,
+        clean.amount,
+        clean.note,
+        numericId,
+      ],
+    );
     console.log(`[Database/updateTransaction] SQLite - Target:${idOrRow}, Changes:${res.changes}`);
     if (res.changes === 0) throw new Error('找不到該筆交易紀錄');
     return { success: true, message: '成功更新紀錄！' };
@@ -654,12 +891,13 @@ export const Database = {
       return { success: true, message: '成功刪除紀錄！' };
     }
 
-    const db = await getSqliteDb();
     const numericId = Number(idOrRow);
-    let res = await db.runAsync('DELETE FROM transactions WHERE id = ?', [numericId]);
-    if (res.changes === 0) {
-      res = await db.runAsync('DELETE FROM transactions WHERE row_number = ?', [numericId]);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      throw new Error('找不到該筆交易紀錄');
     }
+
+    const db = await getSqliteDb();
+    const res = await db.runAsync('DELETE FROM transactions WHERE id = ?', [numericId]);
     console.log(`[Database/deleteTransaction] SQLite - Target:${idOrRow}, Changes:${res.changes}`);
     if (res.changes === 0) throw new Error('找不到該筆交易紀錄');
     return { success: true, message: '成功刪除紀錄！' };
@@ -677,13 +915,8 @@ export const Database = {
     if (row) {
       try {
         const parsed = JSON.parse(row.value) as Partial<CustomSettings>;
-        return {
-          ...DEFAULT_SETTINGS,
-          ...parsed,
-          currencies: (parsed.currencies?.length
-            ? parsed.currencies
-            : DEFAULT_SETTINGS.currencies) as CurrencyCode[],
-        };
+        const normalized = normalizeLoadedSettings(parsed);
+        if (normalized) return normalized;
       } catch {
         // Fallback to default
       }
@@ -693,18 +926,32 @@ export const Database = {
 
   async saveSettings(settings: Partial<CustomSettings>): Promise<ApiActionResult> {
     const current = await this.getSettings();
+    const nextAccounts =
+      settings.accounts !== undefined ? cleanUniqueStrings(settings.accounts) : current.accounts;
+    const nextCategories =
+      settings.categories !== undefined
+        ? cleanUniqueStrings(settings.categories)
+        : current.categories;
+    if (nextAccounts.length === 0) {
+      throw new Error('至少需保留 1 個帳戶');
+    }
+    if (nextCategories.length === 0) {
+      throw new Error('至少需保留 1 個分類');
+    }
+
+    const nextCurrencies =
+      settings.currencies !== undefined
+        ? (cleanUniqueStrings(settings.currencies).map((c) => c.toUpperCase()) as CurrencyCode[])
+        : current.currencies;
+
     const merged: CustomSettings = {
       ...current,
       ...settings,
-      accounts: (settings.accounts ?? current.accounts)
-        .map((a) => String(a).trim())
-        .filter(Boolean),
-      categories: (settings.categories ?? current.categories)
-        .map((c) => String(c).trim())
-        .filter(Boolean),
-      currencies: (settings.currencies ?? current.currencies) as CurrencyCode[],
+      accounts: nextAccounts,
+      categories: nextCategories,
+      currencies: nextCurrencies.length > 0 ? nextCurrencies : current.currencies,
       baseCurrency: (settings.baseCurrency
-        ? String(settings.baseCurrency).trim().toUpperCase()
+        ? normalizeCurrencyCode(settings.baseCurrency, current.baseCurrency)
         : current.baseCurrency) as CurrencyCode,
     };
 
@@ -727,7 +974,16 @@ export const Database = {
 
     if (!isNativeMobileRuntime()) {
       const settings = LocalStorageBackend.getSettings();
-      settings.accounts = (settings.accounts || []).filter((a) => a !== target);
+      const nextAccounts = (settings.accounts || []).filter((a) => a !== target);
+      if (nextAccounts.length === 0) {
+        throw new Error('至少需保留 1 個帳戶');
+      }
+      settings.accounts = nextAccounts;
+      if (settings.accountIcons && target in settings.accountIcons) {
+        const nextIcons = { ...settings.accountIcons };
+        delete nextIcons[target];
+        settings.accountIcons = nextIcons;
+      }
       LocalStorageBackend.saveSettings(settings);
 
       let data = LocalStorageBackend.getTransactions();
@@ -750,7 +1006,16 @@ export const Database = {
     let deletedCount = 0;
     await db.withTransactionAsync(async () => {
       const settings = await this.getSettings();
-      settings.accounts = settings.accounts.filter((a) => a !== target);
+      const nextAccounts = settings.accounts.filter((a) => a !== target);
+      if (nextAccounts.length === 0) {
+        throw new Error('至少需保留 1 個帳戶');
+      }
+      settings.accounts = nextAccounts;
+      if (settings.accountIcons && target in settings.accountIcons) {
+        const nextIcons = { ...settings.accountIcons };
+        delete nextIcons[target];
+        settings.accountIcons = nextIcons;
+      }
       await db.runAsync(
         'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
         ['custom_settings', JSON.stringify(settings)],
@@ -772,7 +1037,11 @@ export const Database = {
 
     if (!isNativeMobileRuntime()) {
       const settings = LocalStorageBackend.getSettings();
-      settings.categories = (settings.categories || []).filter((c) => c !== target);
+      const nextCategories = (settings.categories || []).filter((c) => c !== target);
+      if (nextCategories.length === 0) {
+        throw new Error('至少需保留 1 個分類');
+      }
+      settings.categories = nextCategories;
       LocalStorageBackend.saveSettings(settings);
 
       let data = LocalStorageBackend.getTransactions();
@@ -795,7 +1064,11 @@ export const Database = {
     let deletedCount = 0;
     await db.withTransactionAsync(async () => {
       const settings = await this.getSettings();
-      settings.categories = settings.categories.filter((c) => c !== target);
+      const nextCategories = settings.categories.filter((c) => c !== target);
+      if (nextCategories.length === 0) {
+        throw new Error('至少需保留 1 個分類');
+      }
+      settings.categories = nextCategories;
       await db.runAsync(
         'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
         ['custom_settings', JSON.stringify(settings)],
@@ -1097,7 +1370,7 @@ export const Database = {
       const existing = mode === 'overwrite' ? [] : LocalStorageBackend.getTransactions();
       const startRow =
         existing.length > 0 ? Math.max(...existing.map((d) => Number(d.rowNumber) || 0)) + 1 : 2;
-      const baseId = Date.now();
+      const baseId = getNextLocalIdStart(existing);
       const appended: Transaction[] = normalized.map((clean, idx) => ({
         id: baseId + idx,
         rowNumber: startRow + idx,
@@ -1124,7 +1397,7 @@ export const Database = {
         await db.runAsync('DELETE FROM transactions');
       }
       for (const clean of normalized) {
-        const res = await db.runAsync(
+        await db.runAsync(
           `INSERT INTO transactions (date, time, account, name, category, currency, amount, note)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           [
@@ -1138,11 +1411,8 @@ export const Database = {
             clean.note,
           ],
         );
-        await db.runAsync('UPDATE transactions SET row_number = ? WHERE id = ?', [
-          res.lastInsertRowId + 1,
-          res.lastInsertRowId,
-        ]);
       }
+      await db.runAsync('UPDATE transactions SET row_number = id + 1 WHERE row_number IS NULL');
     });
     console.log(`[Database/importTransactions] Done - SQLite Imported:${normalized.length}`);
     return {
@@ -1158,15 +1428,17 @@ export const Database = {
     }
     const db = await getSqliteDb();
     const row = await db.getFirstAsync<{ base: string; rates_json: string; updated_at: string }>(
-      'SELECT base, rates_json, updated_at FROM fx_cache WHERE base = ?',
-      ['TWD'],
+      'SELECT base, rates_json, updated_at FROM fx_cache ORDER BY updated_at DESC LIMIT 1',
     );
     if (!row) return null;
     try {
+      const parsed = JSON.parse(row.rates_json);
+      const cleanRates = sanitizeRatesMap(parsed);
+      if (!cleanRates) return null;
       return {
-        base: row.base,
-        updated: row.updated_at,
-        rates: JSON.parse(row.rates_json),
+        base: row.base || 'TWD',
+        updated: row.updated_at || DEFAULT_EXCHANGE_RATES.updated,
+        rates: cleanRates,
       };
     } catch {
       return null;
@@ -1174,28 +1446,126 @@ export const Database = {
   },
 
   async saveCachedExchangeRates(fx: ExchangeRates): Promise<void> {
+    const cleanRates = sanitizeRatesMap(fx?.rates);
+    if (!cleanRates) return;
+    const payload: ExchangeRates = {
+      base: (fx.base || 'TWD').trim().toUpperCase(),
+      updated: fx.updated || new Date().toISOString(),
+      rates: cleanRates,
+    };
+
     if (!isNativeMobileRuntime()) {
-      LocalStorageBackend.saveCachedFX(fx);
+      LocalStorageBackend.saveCachedFX(payload);
       return;
     }
     const db = await getSqliteDb();
+    await db.withTransactionAsync(async () => {
+      await db.runAsync('DELETE FROM fx_cache');
+      await db.runAsync(
+        'INSERT OR REPLACE INTO fx_cache (base, rates_json, updated_at) VALUES (?, ?, ?)',
+        [payload.base, JSON.stringify(payload.rates), payload.updated],
+      );
+    });
+  },
+
+  async getAiChatHistory(): Promise<AiChatMessage[]> {
+    if (!isNativeMobileRuntime()) {
+      try {
+        const list = LocalStorageBackend.getAiChatHistory();
+        console.log(`[Database/getAiChatHistory] Done - Backend:Local, Count:${list.length}`);
+        return list;
+      } catch (err) {
+        console.warn(
+          '[Database/getAiChatHistory] Failed - Backend:Local, returning empty list:',
+          err instanceof Error ? err.message : 'unknown',
+        );
+        return [];
+      }
+    }
+
+    try {
+      const db = await getSqliteDb();
+      const row = await db.getFirstAsync<{ value: string }>(
+        'SELECT value FROM settings WHERE key = ?',
+        [SQLITE_AI_CHAT_KEY],
+      );
+      if (!row?.value) {
+        console.log('[Database/getAiChatHistory] Done - Backend:SQLite, Count:0');
+        return [];
+      }
+      const parsed: unknown = JSON.parse(row.value);
+      const list = sanitizeAiChatMessages(parsed);
+      console.log(`[Database/getAiChatHistory] Done - Backend:SQLite, Count:${list.length}`);
+      return list;
+    } catch (err) {
+      console.warn(
+        '[Database/getAiChatHistory] Failed - Backend:SQLite, returning empty list:',
+        err instanceof Error ? err.message : 'unknown',
+      );
+      return [];
+    }
+  },
+
+  async saveAiChatHistory(messages: AiChatMessage[]): Promise<ApiActionResult> {
+    const sanitized = sanitizeAiChatMessages(messages);
+    if (!isNativeMobileRuntime()) {
+      LocalStorageBackend.saveAiChatHistory(sanitized);
+      console.log(
+        `[Database/saveAiChatHistory] Done - Backend:Local, Input:${Array.isArray(messages) ? messages.length : 0}, Saved:${sanitized.length}`,
+      );
+      return {
+        success: true,
+        count: sanitized.length,
+        message: '已儲存 AI 對話紀錄！',
+      };
+    }
+
+    const db = await getSqliteDb();
     await db.runAsync(
-      'INSERT OR REPLACE INTO fx_cache (base, rates_json, updated_at) VALUES (?, ?, ?)',
-      [fx.base || 'TWD', JSON.stringify(fx.rates), fx.updated || new Date().toISOString()],
+      'INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)',
+      [SQLITE_AI_CHAT_KEY, JSON.stringify(sanitized)],
     );
+    console.log(
+      `[Database/saveAiChatHistory] Done - Backend:SQLite, Input:${Array.isArray(messages) ? messages.length : 0}, Saved:${sanitized.length}`,
+    );
+    return {
+      success: true,
+      count: sanitized.length,
+      message: '已儲存 AI 對話紀錄！',
+    };
+  },
+
+  async clearAiChatHistory(): Promise<ApiActionResult> {
+    if (!isNativeMobileRuntime()) {
+      LocalStorageBackend.clearAiChatHistory();
+      console.log('[Database/clearAiChatHistory] Done - Backend:Local');
+      return {
+        success: true,
+        message: '已清除 AI 對話紀錄！',
+      };
+    }
+
+    const db = await getSqliteDb();
+    await db.runAsync('DELETE FROM settings WHERE key = ?', [SQLITE_AI_CHAT_KEY]);
+    console.log('[Database/clearAiChatHistory] Done - Backend:SQLite');
+    return {
+      success: true,
+      message: '已清除 AI 對話紀錄！',
+    };
   },
 
   async resetSeedData(): Promise<ApiActionResult> {
     const seedTx = getDefaultSeedTransactions();
     const seedSettings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS)) as CustomSettings;
+    const seedFx: ExchangeRates = {
+      ...DEFAULT_EXCHANGE_RATES,
+      rates: { ...DEFAULT_EXCHANGE_RATES.rates },
+    };
 
     if (!isNativeMobileRuntime()) {
       LocalStorageBackend.saveSettings(seedSettings);
       LocalStorageBackend.saveTransactions(seedTx);
-      LocalStorageBackend.saveCachedFX({
-        ...DEFAULT_EXCHANGE_RATES,
-        updated: new Date().toISOString(),
-      });
+      LocalStorageBackend.saveCachedFX(seedFx);
       return {
         success: true,
         count: seedTx.length,
@@ -1206,6 +1576,12 @@ export const Database = {
     const db = await getSqliteDb();
     await db.withTransactionAsync(async () => {
       await db.runAsync('DELETE FROM transactions');
+      await db.runAsync('DELETE FROM fx_cache');
+      await db.runAsync('INSERT OR REPLACE INTO fx_cache (base, rates_json, updated_at) VALUES (?, ?, ?)', [
+        seedFx.base,
+        JSON.stringify(seedFx.rates),
+        seedFx.updated,
+      ]);
       await db.runAsync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [
         'custom_settings',
         JSON.stringify(seedSettings),

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -7,10 +7,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AlertTriangle, Pencil, Plus, Trash2 } from 'lucide-react-native';
+import { AlertTriangle, CheckCircle2, Pencil, Plus, Trash2 } from 'lucide-react-native';
 import { ACCOUNT_ICON_OPTIONS, LedgerIcon } from '@/components/LedgerIcon';
+import { MONO_FONT } from '@/components/ui/HudReticle';
 import { useLedgerStore } from '@/store/useLedgerStore';
-import { getAccountMeta } from '@/theme/colors';
+import { getAccountMeta, HUD_RADIUS } from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { SettingsModalFrame } from './SettingsModalFrame';
 import { FeedbackState } from './settingsHelpers';
@@ -43,15 +44,17 @@ export function AccountManagerModal({
   const [subview, setSubview] = useState<AccountSubview>({ kind: 'list' });
   const [newName, setNewName] = useState('');
   const [renameInput, setRenameInput] = useState('');
-  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [inlineFeedback, setInlineFeedback] = useState<FeedbackState | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const isBusyRef = useRef(false);
 
   useEffect(() => {
     if (!visible) {
       setSubview({ kind: 'list' });
       setNewName('');
       setRenameInput('');
-      setInlineError(null);
+      setInlineFeedback(null);
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   }, [visible]);
@@ -66,27 +69,38 @@ export function AccountManagerModal({
   }, [transactions]);
 
   const handleAdd = async () => {
+    if (isBusyRef.current) return;
     const clean = newName.trim();
     if (!clean) {
-      setInlineError('請輸入帳戶名稱');
+      setInlineFeedback({ type: 'error', message: '請輸入帳戶名稱' });
       return;
     }
-    setInlineError(null);
+    isBusyRef.current = true;
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       console.log(`[Settings/AccountManagerModal] Add - name=${clean}`);
       await addAccount(clean);
       setNewName('');
-      onFeedback({ type: 'success', message: `已新增帳戶「${clean}」` });
+      const fb: FeedbackState = { type: 'success', message: `已新增帳戶「${clean}」` };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '新增帳戶失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '新增帳戶失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const handlePickIcon = async (account: string, iconName: string) => {
+    if (isBusyRef.current) return;
+    isBusyRef.current = true;
     console.log(`[Settings/AccountManagerModal] PickIcon - account=${account}, icon=${iconName}`);
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       await updateSettings({
@@ -96,22 +110,29 @@ export function AccountManagerModal({
         },
       });
       setSubview({ kind: 'list' });
-      onFeedback({ type: 'success', message: `已更新「${account}」圖示` });
+      const fb: FeedbackState = { type: 'success', message: `已更新「${account}」圖示` };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '更新圖示失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '更新圖示失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const handleConfirmRename = async () => {
-    if (subview.kind !== 'rename') return;
+    if (subview.kind !== 'rename' || isBusyRef.current) return;
     const clean = renameInput.trim();
     if (!clean) {
-      setInlineError('新帳戶名稱不可為空');
+      setInlineFeedback({ type: 'error', message: '新帳戶名稱不可為空' });
       return;
     }
-    setInlineError(null);
+    isBusyRef.current = true;
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       console.log(
@@ -119,20 +140,27 @@ export function AccountManagerModal({
       );
       await renameAccount(subview.account, clean);
       setSubview({ kind: 'list' });
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'success',
         message: `已將帳戶「${subview.account}」更名為「${clean}」`,
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '更名失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '更名失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const handleConfirmDelete = async () => {
-    if (subview.kind !== 'delete') return;
-    setInlineError(null);
+    if (subview.kind !== 'delete' || isBusyRef.current) return;
+    isBusyRef.current = true;
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       console.log(
@@ -145,25 +173,31 @@ export function AccountManagerModal({
         await updateSettings({ accountIcons: nextIcons });
       }
       setSubview({ kind: 'list' });
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'success',
         message: `已刪除帳戶「${subview.account}」及 ${res.deletedCount ?? subview.linkedCount} 筆關聯交易`,
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '刪除失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '刪除失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const modalTitle =
     subview.kind === 'icon'
-      ? `選擇圖示：${subview.account}`
+      ? `選擇圖示 · ${subview.account}`
       : subview.kind === 'rename'
-        ? `更名帳戶：${subview.account}`
+        ? `更名帳戶 · ${subview.account}`
         : subview.kind === 'delete'
-          ? `刪除帳戶：${subview.account}`
-          : '管理帳戶';
+          ? `刪除帳戶 · ${subview.account}`
+          : '帳戶管理';
 
   return (
     <SettingsModalFrame
@@ -176,20 +210,44 @@ export function AccountManagerModal({
       onBack={
         subview.kind !== 'list'
           ? () => {
-              setInlineError(null);
+              setInlineFeedback(null);
               setSubview({ kind: 'list' });
             }
           : undefined
       }
     >
-      {inlineError ? (
+      {inlineFeedback ? (
         <View
           style={[
             styles.errorBox,
-            { backgroundColor: colors.expenseBg, borderColor: colors.expense },
+            {
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              backgroundColor:
+                inlineFeedback.type === 'success' ? colors.incomeBg : colors.expenseBg,
+              borderColor:
+                inlineFeedback.type === 'success' ? colors.income : colors.expense,
+            },
           ]}
         >
-          <Text style={[styles.errorText, { color: colors.expense }]}>{inlineError}</Text>
+          {inlineFeedback.type === 'success' ? (
+            <CheckCircle2 size={15} color={colors.income} />
+          ) : (
+            <AlertTriangle size={15} color={colors.expense} />
+          )}
+          <Text
+            style={[
+              styles.errorText,
+              {
+                flex: 1,
+                color:
+                  inlineFeedback.type === 'success' ? colors.income : colors.expense,
+              },
+            ]}
+          >
+            {inlineFeedback.message}
+          </Text>
         </View>
       ) : null}
 
@@ -199,6 +257,7 @@ export function AccountManagerModal({
             <TextInput
               value={newName}
               onChangeText={setNewName}
+              editable={!isBusy}
               placeholder="輸入新帳戶名稱（如：玉山銀行）"
               placeholderTextColor={colors.textMuted}
               style={[
@@ -214,9 +273,15 @@ export function AccountManagerModal({
             <Pressable
               onPress={handleAdd}
               disabled={isBusy}
-              style={[styles.addBtn, { backgroundColor: colors.primary }]}
+              style={[
+                styles.addBtn,
+                {
+                  backgroundColor: colors.primary,
+                  borderColor: colors.primary,
+                },
+              ]}
             >
-              <Plus size={18} color="#FFFFFF" />
+              <Plus size={18} color={colors.onPrimary} />
             </Pressable>
           </View>
 
@@ -237,11 +302,19 @@ export function AccountManagerModal({
                   ]}
                 >
                   <Pressable
+                    disabled={isBusy}
                     onPress={() => {
-                      setInlineError(null);
+                      if (isBusyRef.current) return;
+                      setInlineFeedback(null);
                       setSubview({ kind: 'icon', account: acc });
                     }}
-                    style={[styles.iconBox, { backgroundColor: meta.bgColor }]}
+                    style={[
+                      styles.iconBox,
+                      {
+                        backgroundColor: meta.bgColor,
+                        borderColor: colors.border,
+                      },
+                    ]}
                   >
                     <LedgerIcon name={iconName} size={18} color={meta.color} />
                   </Pressable>
@@ -255,12 +328,19 @@ export function AccountManagerModal({
                   </View>
                   <View style={styles.itemActions}>
                     <Pressable
+                      disabled={isBusy}
                       onPress={() => {
-                        setInlineError(null);
+                        setInlineFeedback(null);
                         setRenameInput(acc);
                         setSubview({ kind: 'rename', account: acc });
                       }}
-                      style={[styles.smallBtn, { backgroundColor: colors.chipBg }]}
+                      style={[
+                        styles.smallBtn,
+                        {
+                          backgroundColor: colors.chipBg,
+                          borderColor: colors.border,
+                        },
+                      ]}
                     >
                       <Pencil size={13} color={colors.textSecondary} />
                       <Text style={[styles.smallBtnText, { color: colors.textSecondary }]}>
@@ -268,15 +348,25 @@ export function AccountManagerModal({
                       </Text>
                     </Pressable>
                     <Pressable
+                      disabled={isBusy}
                       onPress={() => {
                         if (settings.accounts.length <= 1) {
-                          setInlineError('至少需保留 1 個帳戶，無法全部刪除');
+                          setInlineFeedback({
+                            type: 'error',
+                            message: '至少需保留 1 個帳戶，無法全部刪除',
+                          });
                           return;
                         }
-                        setInlineError(null);
+                        setInlineFeedback(null);
                         setSubview({ kind: 'delete', account: acc, linkedCount: count });
                       }}
-                      style={[styles.smallBtn, { backgroundColor: colors.expenseBg }]}
+                      style={[
+                        styles.smallBtn,
+                        {
+                          backgroundColor: colors.expenseBg,
+                          borderColor: colors.expense,
+                        },
+                      ]}
                     >
                       <Trash2 size={13} color={colors.expense} />
                       <Text style={[styles.smallBtnText, { color: colors.expense }]}>
@@ -305,7 +395,7 @@ export function AccountManagerModal({
                 style={[
                   styles.iconOption,
                   {
-                    backgroundColor: selected ? colors.primaryLight : colors.surfaceElevated,
+                    backgroundColor: selected ? colors.primaryBg : colors.surfaceElevated,
                     borderColor: selected ? colors.primary : colors.border,
                   },
                 ]}
@@ -337,6 +427,7 @@ export function AccountManagerModal({
           <TextInput
             value={renameInput}
             onChangeText={setRenameInput}
+            editable={!isBusy}
             placeholder="輸入新帳戶名稱"
             placeholderTextColor={colors.textMuted}
             autoFocus
@@ -353,12 +444,17 @@ export function AccountManagerModal({
           <Pressable
             onPress={handleConfirmRename}
             disabled={isBusy}
-            style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: colors.primary, borderColor: colors.primary },
+            ]}
           >
             {isBusy ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={colors.onPrimary} />
             ) : (
-              <Text style={styles.primaryBtnText}>確認更名</Text>
+              <Text style={[styles.primaryBtnText, { color: colors.onPrimary }]}>
+                確認更名
+              </Text>
             )}
           </Pressable>
         </View>
@@ -381,12 +477,17 @@ export function AccountManagerModal({
           <Pressable
             onPress={handleConfirmDelete}
             disabled={isBusy}
-            style={[styles.primaryBtn, { backgroundColor: colors.danger }]}
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: colors.danger, borderColor: colors.danger },
+            ]}
           >
             {isBusy ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <Text style={styles.primaryBtnText}>確認連帶刪除</Text>
+              <Text style={[styles.primaryBtnText, { color: '#FFFFFF' }]}>
+                確認連帶刪除
+              </Text>
             )}
           </Pressable>
         </View>
@@ -398,7 +499,7 @@ export function AccountManagerModal({
 const styles = StyleSheet.create({
   errorBox: {
     padding: 10,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   errorText: {
@@ -412,7 +513,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     height: 44,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     paddingHorizontal: 12,
     fontSize: 14,
@@ -420,7 +521,8 @@ const styles = StyleSheet.create({
   addBtn: {
     width: 44,
     height: 44,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -432,13 +534,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     padding: 10,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   iconBox: {
     width: 38,
     height: 38,
-    borderRadius: 12,
+    borderRadius: 6,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -451,8 +554,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   itemCount: {
-    fontSize: 12,
-    marginTop: 1,
+    fontSize: 11,
+    marginTop: 2,
+    fontFamily: MONO_FONT,
+    fontVariant: ['tabular-nums'],
   },
   itemActions: {
     flexDirection: 'row',
@@ -464,7 +569,8 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingHorizontal: 9,
     paddingVertical: 6,
-    borderRadius: 9,
+    borderRadius: 6,
+    borderWidth: 1,
   },
   smallBtnText: {
     fontSize: 12,
@@ -478,7 +584,7 @@ const styles = StyleSheet.create({
   iconOption: {
     width: '30.5%',
     paddingVertical: 14,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     alignItems: 'center',
     gap: 6,
@@ -496,21 +602,23 @@ const styles = StyleSheet.create({
   },
   primaryBtn: {
     height: 44,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryBtnText: {
-    color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.4,
   },
   warningBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
     padding: 12,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   warningText: {
@@ -518,5 +626,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
 });

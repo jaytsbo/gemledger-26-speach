@@ -1,5 +1,10 @@
 export type ThemeMode = 'light' | 'dark' | 'system';
 
+export const HUD_RADIUS = 8;
+export const HUD_RADIUS_LG = 10;
+export const HUD_RETICLE_SIZE = 9;
+export const HUD_RETICLE_WIDTH = 2;
+
 export interface ThemeColors {
   background: string;
   surface: string;
@@ -12,7 +17,12 @@ export interface ThemeColors {
   primary: string;
   primaryLight: string;
   primaryDark: string;
+  primaryBg: string;
+  primaryGlow: string;
+  onPrimary: string;
   accent: string;
+  accentBg: string;
+  accentGlow: string;
   income: string;
   incomeBg: string;
   expense: string;
@@ -25,7 +35,9 @@ export interface ThemeColors {
   tabBarBg: string;
   tabBarBorder: string;
   heroGradientStart: string;
+  heroGradientMid: string;
   heroGradientEnd: string;
+  gridLine: string;
   chipBg: string;
   chipText: string;
   inputBg: string;
@@ -33,66 +45,80 @@ export interface ThemeColors {
 }
 
 export const LIGHT_COLORS: ThemeColors = {
-  background: '#F4F7F6',
-  surface: '#FFFFFF',
-  surfaceElevated: '#F8FAFC',
-  card: '#FFFFFF',
-  cardBorder: '#E2E8F0',
-  text: '#0F172A',
-  textSecondary: '#475569',
-  textMuted: '#94A3B8',
-  primary: '#0F766E',
-  primaryLight: '#CCFBF1',
-  primaryDark: '#115E59',
-  accent: '#14B8A6',
-  income: '#059669',
-  incomeBg: '#ECFDF5',
+  background: '#E8F0FA',
+  surface: 'rgba(255, 255, 255, 0.68)',
+  surfaceElevated: 'rgba(248, 250, 252, 0.64)',
+  card: 'rgba(255, 255, 255, 0.72)',
+  cardBorder: '#CBD5E1',
+  text: '#090D16',
+  textSecondary: '#334155',
+  textMuted: '#64748B',
+  primary: '#0098B3',
+  primaryLight: 'rgba(0, 152, 179, 0.12)',
+  primaryDark: '#007A90',
+  primaryBg: 'rgba(0, 152, 179, 0.10)',
+  primaryGlow: 'rgba(0, 152, 179, 0.18)',
+  onPrimary: '#FFFFFF',
+  accent: '#6D28D9',
+  accentBg: 'rgba(109, 40, 217, 0.10)',
+  accentGlow: 'rgba(109, 40, 217, 0.18)',
+  income: '#00A86B',
+  incomeBg: 'rgba(0, 168, 107, 0.10)',
   expense: '#E11D48',
-  expenseBg: '#FFF1F2',
+  expenseBg: 'rgba(225, 29, 72, 0.10)',
   warning: '#D97706',
-  warningBg: '#FFFBEB',
+  warningBg: 'rgba(217, 119, 6, 0.12)',
   danger: '#DC2626',
-  border: '#E2E8F0',
-  divider: '#F1F5F9',
-  tabBarBg: 'rgba(255, 255, 255, 0.94)',
-  tabBarBorder: '#E2E8F0',
-  heroGradientStart: '#064E3B',
-  heroGradientEnd: '#0F172A',
-  chipBg: '#F1F5F9',
-  chipText: '#334155',
-  inputBg: '#F8FAFC',
-  shadow: '#0F172A',
+  border: '#CBD5E1',
+  divider: '#E2E8F0',
+  tabBarBg: 'rgba(255, 255, 255, 0.82)',
+  tabBarBorder: 'rgba(0, 152, 179, 0.40)',
+  heroGradientStart: '#0A2540',
+  heroGradientMid: '#1E1B4B',
+  heroGradientEnd: '#090D16',
+  gridLine: 'rgba(0, 240, 255, 0.11)',
+  chipBg: 'rgba(226, 232, 240, 0.66)',
+  chipText: '#1E293B',
+  inputBg: 'rgba(248, 250, 252, 0.66)',
+  shadow: '#090D16',
 };
 
 export const DARK_COLORS: ThemeColors = {
-  background: '#090D16',
-  surface: '#111827',
-  surfaceElevated: '#1E293B',
-  card: '#131C2E',
-  cardBorder: '#1E293B',
-  text: '#F8FAFC',
-  textSecondary: '#CBD5E1',
+  background: '#040711',
+  surface: 'rgba(10, 15, 30, 0.64)',
+  surfaceElevated: 'rgba(17, 25, 46, 0.58)',
+  card: 'rgba(13, 20, 37, 0.66)',
+  cardBorder: '#1A2744',
+  text: '#F0F9FF',
+  textSecondary: '#94A3B8',
   textMuted: '#64748B',
-  primary: '#14B8A6',
-  primaryLight: '#134E4A',
-  primaryDark: '#0D9488',
-  accent: '#2DD4BF',
-  income: '#34D399',
-  incomeBg: 'rgba(16, 185, 129, 0.14)',
-  expense: '#FB7185',
-  expenseBg: 'rgba(244, 63, 94, 0.14)',
-  warning: '#FBBF24',
-  warningBg: 'rgba(245, 158, 11, 0.14)',
-  danger: '#F87171',
-  border: '#1E293B',
-  divider: '#1E293B',
-  tabBarBg: 'rgba(17, 24, 39, 0.94)',
-  tabBarBorder: '#1E293B',
-  heroGradientStart: '#065F46',
-  heroGradientEnd: '#020617',
-  chipBg: '#1E293B',
-  chipText: '#E2E8F0',
-  inputBg: '#0F172A',
+  primary: '#00F0FF',
+  primaryLight: 'rgba(0, 240, 255, 0.16)',
+  primaryDark: '#00B8D4',
+  primaryBg: 'rgba(0, 240, 255, 0.12)',
+  primaryGlow: 'rgba(0, 240, 255, 0.28)',
+  onPrimary: '#050811',
+  accent: '#8B5CF6',
+  accentBg: 'rgba(139, 92, 246, 0.14)',
+  accentGlow: 'rgba(139, 92, 246, 0.30)',
+  income: '#00F59B',
+  incomeBg: 'rgba(0, 245, 155, 0.12)',
+  expense: '#FF2A85',
+  expenseBg: 'rgba(255, 42, 133, 0.12)',
+  warning: '#FFB800',
+  warningBg: 'rgba(255, 184, 0, 0.14)',
+  danger: '#FF3366',
+  border: '#1A2744',
+  divider: '#152038',
+  tabBarBg: 'rgba(10, 15, 30, 0.78)',
+  tabBarBorder: 'rgba(0, 240, 255, 0.45)',
+  heroGradientStart: '#07192F',
+  heroGradientMid: '#101336',
+  heroGradientEnd: '#040710',
+  gridLine: 'rgba(0, 240, 255, 0.08)',
+  chipBg: 'rgba(17, 25, 46, 0.62)',
+  chipText: '#CBD5E1',
+  inputBg: 'rgba(7, 12, 24, 0.62)',
   shadow: '#000000',
 };
 
@@ -104,32 +130,32 @@ export interface CategoryMeta {
 }
 
 const CATEGORY_META_MAP: Record<string, CategoryMeta> = {
-  '食': { color: '#F97316', bgColor: 'rgba(249, 115, 22, 0.14)', icon: 'Utensils', label: '食' },
-  '衣': { color: '#EC4899', bgColor: 'rgba(236, 72, 153, 0.14)', icon: 'Shirt', label: '衣' },
-  '住': { color: '#6366F1', bgColor: 'rgba(99, 102, 241, 0.14)', icon: 'Home', label: '住' },
-  '行': { color: '#0EA5E9', bgColor: 'rgba(14, 165, 233, 0.14)', icon: 'TrainFront', label: '行' },
-  '育樂': { color: '#8B5CF6', bgColor: 'rgba(139, 92, 246, 0.14)', icon: 'Gamepad2', label: '育樂' },
-  '學習費用': { color: '#3B82F6', bgColor: 'rgba(59, 130, 246, 0.14)', icon: 'GraduationCap', label: '學習費用' },
-  '醫療/雜項': { color: '#F43F5E', bgColor: 'rgba(244, 63, 94, 0.14)', icon: 'HeartPulse', label: '醫療/雜項' },
-  '收入': { color: '#10B981', bgColor: 'rgba(16, 185, 129, 0.14)', icon: 'Wallet', label: '收入' },
-  '投資': { color: '#0F766E', bgColor: 'rgba(15, 118, 110, 0.14)', icon: 'TrendingUp', label: '投資' },
-  '初始資產': { color: '#64748B', bgColor: 'rgba(100, 116, 139, 0.14)', icon: 'Landmark', label: '初始資產' },
-  '代墊款': { color: '#F59E0B', bgColor: 'rgba(245, 158, 11, 0.14)', icon: 'HandCoins', label: '代墊款' },
-  '代墊回收': { color: '#14B8A6', bgColor: 'rgba(20, 184, 166, 0.14)', icon: 'RotateCcw', label: '代墊回收' },
-  '內部轉帳': { color: '#94A3B8', bgColor: 'rgba(148, 163, 184, 0.14)', icon: 'ArrowLeftRight', label: '內部轉帳' },
+  '食': { color: '#FF7A00', bgColor: 'rgba(255, 122, 0, 0.14)', icon: 'Utensils', label: '食' },
+  '衣': { color: '#FF2A85', bgColor: 'rgba(255, 42, 133, 0.14)', icon: 'Shirt', label: '衣' },
+  '住': { color: '#6366F1', bgColor: 'rgba(99, 102, 241, 0.16)', icon: 'Home', label: '住' },
+  '行': { color: '#00D2FF', bgColor: 'rgba(0, 210, 255, 0.14)', icon: 'TrainFront', label: '行' },
+  '育樂': { color: '#A855F7', bgColor: 'rgba(168, 85, 247, 0.16)', icon: 'Gamepad2', label: '育樂' },
+  '學習費用': { color: '#38BDF8', bgColor: 'rgba(56, 189, 248, 0.14)', icon: 'GraduationCap', label: '學習費用' },
+  '醫療/雜項': { color: '#FF3366', bgColor: 'rgba(255, 51, 102, 0.14)', icon: 'HeartPulse', label: '醫療/雜項' },
+  '收入': { color: '#00F59B', bgColor: 'rgba(0, 245, 155, 0.14)', icon: 'Wallet', label: '收入' },
+  '投資': { color: '#00E5FF', bgColor: 'rgba(0, 229, 255, 0.14)', icon: 'TrendingUp', label: '投資' },
+  '初始資產': { color: '#94A3B8', bgColor: 'rgba(148, 163, 184, 0.16)', icon: 'Landmark', label: '初始資產' },
+  '代墊款': { color: '#FFB800', bgColor: 'rgba(255, 184, 0, 0.16)', icon: 'HandCoins', label: '代墊款' },
+  '代墊回收': { color: '#2DD4BF', bgColor: 'rgba(45, 212, 191, 0.14)', icon: 'RotateCcw', label: '代墊回收' },
+  '內部轉帳': { color: '#7DD3FC', bgColor: 'rgba(125, 211, 252, 0.14)', icon: 'ArrowLeftRight', label: '內部轉帳' },
 };
 
 const FALLBACK_PALETTE = [
-  '#3B82F6',
-  '#F97316',
-  '#8B5CF6',
-  '#06B6D4',
-  '#EC4899',
-  '#EAB308',
-  '#10B981',
-  '#6366F1',
-  '#EF4444',
-  '#14B8A6',
+  '#00D2FF',
+  '#FF7A00',
+  '#A855F7',
+  '#00F59B',
+  '#FF2A85',
+  '#FFB800',
+  '#38BDF8',
+  '#818CF8',
+  '#FF3366',
+  '#2DD4BF',
 ];
 
 function hashColor(key: string): string {
@@ -162,16 +188,16 @@ export interface AccountMeta {
 }
 
 const ACCOUNT_META_MAP: Record<string, AccountMeta> = {
-  '現金': { color: '#10B981', bgColor: 'rgba(16, 185, 129, 0.16)', icon: 'Banknote', shortLabel: '現金' },
-  'LINE Pay': { color: '#06B6D4', bgColor: 'rgba(6, 182, 212, 0.16)', icon: 'Smartphone', shortLabel: 'LP' },
-  'LINE Bank': { color: '#3B82F6', bgColor: 'rgba(59, 130, 246, 0.16)', icon: 'Building2', shortLabel: 'LB' },
-  '郵局': { color: '#14B8A6', bgColor: 'rgba(20, 184, 166, 0.16)', icon: 'Landmark', shortLabel: '郵局' },
-  '永豐銀行': { color: '#EF4444', bgColor: 'rgba(239, 68, 68, 0.16)', icon: 'Landmark', shortLabel: '永豐' },
-  '國泰世華': { color: '#EAB308', bgColor: 'rgba(234, 179, 8, 0.16)', icon: 'CreditCard', shortLabel: '國泰' },
-  '玉山銀行': { color: '#8B5CF6', bgColor: 'rgba(139, 92, 246, 0.16)', icon: 'CreditCard', shortLabel: '玉山' },
-  '悠遊卡': { color: '#6366F1', bgColor: 'rgba(99, 102, 241, 0.16)', icon: 'Ticket', shortLabel: '悠遊' },
-  '街口支付': { color: '#F97316', bgColor: 'rgba(249, 115, 22, 0.16)', icon: 'Zap', shortLabel: '街口' },
-  '台新Richart': { color: '#EC4899', bgColor: 'rgba(236, 72, 153, 0.16)', icon: 'Wallet', shortLabel: 'Richart' },
+  '現金': { color: '#00F59B', bgColor: 'rgba(0, 245, 155, 0.16)', icon: 'Banknote', shortLabel: '現金' },
+  'LINE Pay': { color: '#00E5FF', bgColor: 'rgba(0, 229, 255, 0.16)', icon: 'Smartphone', shortLabel: 'LP' },
+  'LINE Bank': { color: '#38BDF8', bgColor: 'rgba(56, 189, 248, 0.16)', icon: 'Building2', shortLabel: 'LB' },
+  '郵局': { color: '#2DD4BF', bgColor: 'rgba(45, 212, 191, 0.16)', icon: 'Landmark', shortLabel: '郵局' },
+  '永豐銀行': { color: '#FF3366', bgColor: 'rgba(255, 51, 102, 0.16)', icon: 'Landmark', shortLabel: '永豐' },
+  '國泰世華': { color: '#FFB800', bgColor: 'rgba(255, 184, 0, 0.16)', icon: 'CreditCard', shortLabel: '國泰' },
+  '玉山銀行': { color: '#A855F7', bgColor: 'rgba(168, 85, 247, 0.16)', icon: 'CreditCard', shortLabel: '玉山' },
+  '悠遊卡': { color: '#818CF8', bgColor: 'rgba(129, 140, 248, 0.16)', icon: 'Ticket', shortLabel: '悠遊' },
+  '街口支付': { color: '#FF7A00', bgColor: 'rgba(255, 122, 0, 0.16)', icon: 'Zap', shortLabel: '街口' },
+  '台新Richart': { color: '#FF2A85', bgColor: 'rgba(255, 42, 133, 0.16)', icon: 'Wallet', shortLabel: 'Richart' },
 };
 
 export function getAccountMeta(account: string): AccountMeta {

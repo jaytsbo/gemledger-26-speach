@@ -3,6 +3,7 @@ import { ApiService } from '../services/apiService';
 import { DEFAULT_SETTINGS } from '../services/database';
 import {
   AIBookkeeperResponse,
+  AiChatMessage,
   ApiActionResult,
   CurrencyCode,
   CustomSettings,
@@ -34,9 +35,14 @@ export interface LedgerState {
   isLoading: boolean;
   isSyncingFX: boolean;
   initialized: boolean;
+  aiChatMessages: AiChatMessage[];
 
   initialize: () => Promise<void>;
   refreshAll: (forceRefresh?: boolean) => Promise<void>;
+  setAiChatMessages: (
+    next: AiChatMessage[] | ((prev: AiChatMessage[]) => AiChatMessage[]),
+  ) => void;
+  clearAiChat: () => Promise<void>;
   setBaseCurrency: (currency: CurrencyCode) => Promise<void>;
   setFilter: (patch: Partial<FilterState>) => void;
   resetFilters: () => void;
@@ -65,9 +71,66 @@ export interface LedgerState {
   resetToSeedData: () => Promise<ApiActionResult>;
 }
 
-let initPromise: Promise<void> | null = null;
+const AI_CHAT_SAVE_DEBOUNCE_MS = 400;
 
-export const useLedgerStore = create<LedgerState>((set, get) => ({
+let initPromise: Promise<void> | null = null;
+let settingsMutationQueue: Promise<unknown> = Promise.resolve();
+let aiChatSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let aiChatPersistEpoch = 0;
+let aiChatStorageQueue: Promise<unknown> = Promise.resolve();
+let fxApplyEpoch = 0;
+let fxSyncInFlightCount = 0;
+
+function enqueueSettingsMutation<T>(task: () => Promise<T>): Promise<T> {
+  const next = settingsMutationQueue.then(task, task);
+  settingsMutationQueue = next.catch(() => {});
+  return next;
+}
+
+function enqueueAiChatStorage<T>(task: () => Promise<T>): Promise<T> {
+  const next = aiChatStorageQueue.then(task, task);
+  aiChatStorageQueue = next.catch(() => {});
+  return next;
+}
+
+export const useLedgerStore = create<LedgerState>((set, get) => {
+  const syncTransactions = async (): Promise<void> => {
+    const transactions = await ApiService.getSheetData(true);
+    set((state) => ({
+      transactions,
+      filteredTransactions: filterTransactions(transactions, state.filters),
+    }));
+  };
+
+  const syncSettings = async (syncBaseCurrency = false): Promise<void> => {
+    const updatedSettings = await ApiService.getCustomSettings();
+    set((state) => ({
+      settings: updatedSettings,
+      ...(syncBaseCurrency
+        ? { baseCurrency: (updatedSettings.baseCurrency || state.baseCurrency) as CurrencyCode }
+        : {}),
+    }));
+  };
+
+  const syncSettingsAndTransactions = async (
+    mapFilters?: (filters: FilterState) => FilterState,
+  ): Promise<void> => {
+    const [updatedSettings, transactions] = await Promise.all([
+      ApiService.getCustomSettings(),
+      ApiService.getSheetData(true),
+    ]);
+    set((state) => {
+      const nextFilters = mapFilters ? mapFilters(state.filters) : state.filters;
+      return {
+        settings: updatedSettings,
+        transactions,
+        ...(mapFilters ? { filters: nextFilters } : {}),
+        filteredTransactions: filterTransactions(transactions, nextFilters),
+      };
+    });
+  };
+
+  return {
   transactions: [],
   filteredTransactions: [],
   settings: DEFAULT_SETTINGS,
@@ -77,27 +140,53 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
   isLoading: false,
   isSyncingFX: false,
   initialized: false,
+  aiChatMessages: [],
 
   initialize: async () => {
     if (get().initialized) return;
     if (initPromise) return initPromise;
 
     initPromise = (async () => {
+      const chatEpochAtStart = aiChatPersistEpoch;
       set({ isLoading: true });
-      console.log('[LedgerStore/initialize] Start - Loading settings, transactions, FX rates');
+      console.log(
+        '[LedgerStore/initialize] Start - Loading settings, transactions, cached FX, AI chat history',
+      );
       try {
-        const [settingsRes, txRes, fxRes] = await Promise.allSettled([
+        const [settingsRes, txRes, cachedFxRes, chatRes] = await Promise.allSettled([
           ApiService.getCustomSettings(),
           ApiService.getSheetData(false),
-          ApiService.getExchangeRates(),
+          ApiService.getCachedExchangeRates(),
+          ApiService.getAiChatHistory(),
         ]);
 
         const nextSettings =
           settingsRes.status === 'fulfilled' ? settingsRes.value : get().settings;
-        const nextTransactions =
-          txRes.status === 'fulfilled' && Array.isArray(txRes.value) ? txRes.value : [];
-        const nextFx =
-          fxRes.status === 'fulfilled' && fxRes.value?.rates ? fxRes.value : get().exchangeRates;
+        const txLoaded = txRes.status === 'fulfilled' && Array.isArray(txRes.value);
+        const nextTransactions = txLoaded ? txRes.value : get().transactions;
+        const cachedFx =
+          cachedFxRes.status === 'fulfilled' && cachedFxRes.value?.rates
+            ? cachedFxRes.value
+            : null;
+        const nextFx: ExchangeRates = cachedFx ?? {
+          ...DEFAULT_EXCHANGE_RATES,
+          rates: { ...DEFAULT_EXCHANGE_RATES.rates },
+        };
+        if (cachedFxRes.status === 'rejected') {
+          console.warn(
+            '[LedgerStore/initialize] Warning - Cached FX load failed, using DEFAULT_EXCHANGE_RATES:',
+            cachedFxRes.reason instanceof Error ? cachedFxRes.reason.message : 'unknown',
+          );
+        }
+
+        const chatLoaded = chatRes.status === 'fulfilled' && Array.isArray(chatRes.value);
+        if (chatRes.status === 'rejected') {
+          console.warn(
+            '[LedgerStore/initialize] Warning - AI chat history load failed, continuing:',
+            chatRes.reason instanceof Error ? chatRes.reason.message : 'unknown',
+          );
+        }
+
         const nextBaseCurrency = (nextSettings.baseCurrency || 'TWD') as CurrencyCode;
 
         set((state) => ({
@@ -106,15 +195,52 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
           filteredTransactions: filterTransactions(nextTransactions, state.filters),
           exchangeRates: nextFx,
           baseCurrency: nextBaseCurrency,
+          aiChatMessages:
+            chatLoaded && aiChatPersistEpoch === chatEpochAtStart
+              ? chatRes.value
+              : state.aiChatMessages,
           isLoading: false,
-          initialized: true,
+          initialized: txLoaded,
         }));
-        console.log(
-          `[LedgerStore/initialize] Done - Tx:${nextTransactions.length}, Base:${nextBaseCurrency}`,
-        );
+
+        if (!txLoaded) {
+          console.warn(
+            '[LedgerStore/initialize] Warning - Transactions load failed, keeping initialized=false',
+          );
+        } else {
+          console.log(
+            `[LedgerStore/initialize] Done - Tx:${nextTransactions.length}, Base:${nextBaseCurrency}, CachedFX:${Boolean(cachedFx)}, Chat:${chatLoaded ? chatRes.value.length : 0}`,
+          );
+          // Stale-While-Revalidate: refresh live FX in background without blocking cold start
+          void (async () => {
+            const myEpoch = ++fxApplyEpoch;
+            fxSyncInFlightCount += 1;
+            set({ isSyncingFX: true });
+            console.log('[LedgerStore/initialize] BackgroundFXStart - Fetching live FX rates');
+            try {
+              const liveFx = await ApiService.getExchangeRates();
+              if (fxApplyEpoch === myEpoch && liveFx?.rates) {
+                set({ exchangeRates: liveFx });
+                console.log(
+                  `[LedgerStore/initialize] BackgroundFXDone - Updated:${liveFx.updated}`,
+                );
+              }
+            } catch (err) {
+              console.warn(
+                '[LedgerStore/initialize] BackgroundFXFailed - Keeping cached/default FX:',
+                err instanceof Error ? err.message : 'unknown',
+              );
+            } finally {
+              fxSyncInFlightCount = Math.max(0, fxSyncInFlightCount - 1);
+              if (fxSyncInFlightCount === 0) {
+                set({ isSyncingFX: false });
+              }
+            }
+          })();
+        }
       } catch (err) {
         console.warn('[LedgerStore/initialize] Error -', err);
-        set({ isLoading: false, initialized: true });
+        set({ isLoading: false, initialized: false });
       } finally {
         initPromise = null;
       }
@@ -124,39 +250,123 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
   },
 
   refreshAll: async (forceRefresh = true) => {
+    const myFxEpoch = ++fxApplyEpoch;
     set({ isLoading: true });
     console.log(`[LedgerStore/refreshAll] Request - Force:${forceRefresh}`);
     try {
-      const [settings, transactions, exchangeRates] = await Promise.all([
+      if (forceRefresh) {
+        ApiService.clearCache();
+      }
+      const [settings, transactions, fxResult] = await Promise.all([
         ApiService.getCustomSettings(),
         ApiService.getSheetData(forceRefresh),
-        ApiService.getExchangeRates(),
+        ApiService.getExchangeRates().catch((err) => {
+          console.warn(
+            '[LedgerStore/refreshAll] FXFailed - Keeping existing exchangeRates:',
+            err instanceof Error ? err.message : 'unknown',
+          );
+          return null;
+        }),
       ]);
       set((state) => ({
         settings,
         transactions,
         filteredTransactions: filterTransactions(transactions, state.filters),
-        exchangeRates,
+        exchangeRates:
+          fxResult?.rates && fxApplyEpoch === myFxEpoch ? fxResult : state.exchangeRates,
         baseCurrency: (settings.baseCurrency || state.baseCurrency) as CurrencyCode,
         isLoading: false,
       }));
-      console.log(`[LedgerStore/refreshAll] Done - Tx:${transactions.length}`);
+      console.log(
+        `[LedgerStore/refreshAll] Done - Tx:${transactions.length}, FXUpdated:${Boolean(fxResult?.rates)}`,
+      );
     } catch (err) {
       set({ isLoading: false });
       throw err;
     }
   },
 
+  setAiChatMessages: (next) => {
+    aiChatPersistEpoch += 1;
+    const scheduledEpoch = aiChatPersistEpoch;
+    let resolvedCount = 0;
+
+    set((state) => {
+      const resolved = typeof next === 'function' ? next(state.aiChatMessages) : next;
+      const safeList = Array.isArray(resolved) ? resolved : [];
+      resolvedCount = safeList.length;
+      return { aiChatMessages: safeList };
+    });
+
+    if (aiChatSaveTimer) {
+      clearTimeout(aiChatSaveTimer);
+      aiChatSaveTimer = null;
+    }
+
+    console.log(
+      `[LedgerStore/setAiChatMessages] QueuePersist - Count:${resolvedCount}, DebounceMs:${AI_CHAT_SAVE_DEBOUNCE_MS}`,
+    );
+
+    aiChatSaveTimer = setTimeout(() => {
+      aiChatSaveTimer = null;
+      if (scheduledEpoch !== aiChatPersistEpoch) return;
+      const snapshot = get().aiChatMessages;
+      void enqueueAiChatStorage(async () => {
+        if (scheduledEpoch !== aiChatPersistEpoch) return;
+        try {
+          const res = await ApiService.saveAiChatHistory(snapshot);
+          console.log(
+            `[LedgerStore/setAiChatMessages] Persisted - Saved:${res?.count ?? snapshot.length}`,
+          );
+        } catch (err) {
+          console.warn(
+            '[LedgerStore/setAiChatMessages] PersistFailed -',
+            err instanceof Error ? err.message : 'unknown',
+          );
+        }
+      });
+    }, AI_CHAT_SAVE_DEBOUNCE_MS);
+  },
+
+  clearAiChat: async () => {
+    aiChatPersistEpoch += 1;
+    if (aiChatSaveTimer) {
+      clearTimeout(aiChatSaveTimer);
+      aiChatSaveTimer = null;
+    }
+    set({ aiChatMessages: [] });
+    console.log('[LedgerStore/clearAiChat] Request - Cleared state and cancelled pending persist');
+    await enqueueAiChatStorage(async () => {
+      await ApiService.clearAiChatHistory();
+      console.log('[LedgerStore/clearAiChat] Done - Cleared persisted AI chat history');
+    });
+  },
+
   setBaseCurrency: async (currency: CurrencyCode) => {
-    const nextCurrency = currency.toUpperCase() as CurrencyCode;
-    console.log(`[LedgerStore/setBaseCurrency] Update - Currency:${nextCurrency}`);
-    set((state) => ({
-      baseCurrency: nextCurrency,
-      settings: { ...state.settings, baseCurrency: nextCurrency },
-    }));
-    await ApiService.saveCustomSettings({
-      ...get().settings,
-      baseCurrency: nextCurrency,
+    const nextCurrency = currency.trim().toUpperCase() as CurrencyCode;
+    return enqueueSettingsMutation(async () => {
+      const prevCurrency = get().baseCurrency;
+      const prevSettings = get().settings;
+      console.log(`[LedgerStore/setBaseCurrency] Update - Currency:${nextCurrency}`);
+      set((state) => ({
+        baseCurrency: nextCurrency,
+        settings: { ...state.settings, baseCurrency: nextCurrency },
+      }));
+      try {
+        await ApiService.saveCustomSettings({
+          ...prevSettings,
+          baseCurrency: nextCurrency,
+        });
+      } catch (err) {
+        console.warn(
+          '[LedgerStore/setBaseCurrency] Rollback - Save failed, restoring previous currency',
+        );
+        set({
+          baseCurrency: prevCurrency,
+          settings: prevSettings,
+        });
+        throw err;
+      }
     });
   },
 
@@ -167,7 +377,11 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
         const [y, m] = patch.date.split('-');
         if (y) nextFilters.year = y;
         if (m) nextFilters.month = m;
-      } else if (patch.year !== undefined && patch.year !== state.filters.year && !patch.date) {
+      } else if (
+        patch.date === undefined &&
+        ((patch.year !== undefined && patch.year !== state.filters.year) ||
+          (patch.month !== undefined && patch.month !== state.filters.month))
+      ) {
         nextFilters.date = '';
       }
       return {
@@ -188,205 +402,138 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
   addTransaction: async (item: TransactionInput) => {
     console.log(`[LedgerStore/addTransaction] Request - Name:${item.name}, Amt:${item.amount}`);
     const res = await ApiService.addTransaction(item);
-    const transactions = await ApiService.getSheetData(true);
-    set((state) => ({
-      transactions,
-      filteredTransactions: filterTransactions(transactions, state.filters),
-    }));
+    await syncTransactions();
     return res;
   },
 
   batchAddTransactions: async (items: TransactionInput[]) => {
     console.log(`[LedgerStore/batchAddTransactions] Request - Count:${items.length}`);
     const res = await ApiService.batchAddTransactions(items);
-    const transactions = await ApiService.getSheetData(true);
-    set((state) => ({
-      transactions,
-      filteredTransactions: filterTransactions(transactions, state.filters),
-    }));
+    await syncTransactions();
     return res;
   },
 
   updateTransaction: async (idOrRow: number | string, item: TransactionInput) => {
     console.log(`[LedgerStore/updateTransaction] Request - Target:${idOrRow}`);
     const res = await ApiService.updateTransaction(idOrRow, item);
-    const transactions = await ApiService.getSheetData(true);
-    set((state) => ({
-      transactions,
-      filteredTransactions: filterTransactions(transactions, state.filters),
-    }));
+    await syncTransactions();
     return res;
   },
 
   deleteTransaction: async (idOrRow: number | string) => {
     console.log(`[LedgerStore/deleteTransaction] Request - Target:${idOrRow}`);
     const res = await ApiService.deleteTransaction(idOrRow);
-    const transactions = await ApiService.getSheetData(true);
-    set((state) => ({
-      transactions,
-      filteredTransactions: filterTransactions(transactions, state.filters),
-    }));
+    await syncTransactions();
     return res;
   },
 
   addAccount: async (accountName: string) => {
     const clean = accountName.trim();
     if (!clean) throw new Error('請輸入帳戶名稱');
-    const current = get().settings;
-    if (current.accounts.includes(clean)) {
-      throw new Error(`帳戶「${clean}」已存在`);
-    }
-    const nextAccounts = [...current.accounts, clean];
-    console.log(`[LedgerStore/addAccount] Request - Account:${clean}`);
-    const res = await ApiService.saveCustomSettings({
-      ...current,
-      accounts: nextAccounts,
+    return enqueueSettingsMutation(async () => {
+      const current = get().settings;
+      if (current.accounts.includes(clean)) {
+        throw new Error(`帳戶「${clean}」已存在`);
+      }
+      const nextAccounts = [...current.accounts, clean];
+      console.log(`[LedgerStore/addAccount] Request - Account:${clean}`);
+      const res = await ApiService.saveCustomSettings({
+        ...current,
+        accounts: nextAccounts,
+      });
+      await syncSettings();
+      return res;
     });
-    const updatedSettings = await ApiService.getCustomSettings();
-    set({ settings: updatedSettings });
-    return res;
   },
 
   renameAccount: async (oldName: string, newName: string) => {
     const oldClean = oldName.trim();
     const newClean = newName.trim();
-    console.log(`[LedgerStore/renameAccount] Request - ${oldClean} -> ${newClean}`);
-    const res = await ApiService.renameAccount(oldClean, newClean);
-    const [updatedSettings, transactions] = await Promise.all([
-      ApiService.getCustomSettings(),
-      ApiService.getSheetData(true),
-    ]);
-    set((state) => {
-      const nextFilters =
-        state.filters.account === oldClean
-          ? { ...state.filters, account: newClean }
-          : state.filters;
-      return {
-        settings: updatedSettings,
-        transactions,
-        filters: nextFilters,
-        filteredTransactions: filterTransactions(transactions, nextFilters),
-      };
+    return enqueueSettingsMutation(async () => {
+      console.log(`[LedgerStore/renameAccount] Request - ${oldClean} -> ${newClean}`);
+      const res = await ApiService.renameAccount(oldClean, newClean);
+      await syncSettingsAndTransactions((filters) =>
+        filters.account.trim() === oldClean ? { ...filters, account: newClean } : filters,
+      );
+      return res;
     });
-    return res;
   },
 
   removeAccountCascade: async (accountName: string) => {
-    const current = get().settings;
-    if (current.accounts.length <= 1) {
-      throw new Error('至少需保留 1 個帳戶');
-    }
-    console.log(`[LedgerStore/removeAccountCascade] Request - Account:${accountName}`);
-    const res = await ApiService.deleteAccountCascade(accountName);
-    const [updatedSettings, transactions] = await Promise.all([
-      ApiService.getCustomSettings(),
-      ApiService.getSheetData(true),
-    ]);
-    set((state) => {
-      const nextFilters =
-        state.filters.account === accountName
-          ? { ...state.filters, account: 'ALL' }
-          : state.filters;
-      return {
-        settings: updatedSettings,
-        transactions,
-        filters: nextFilters,
-        filteredTransactions: filterTransactions(transactions, nextFilters),
-      };
+    const cleanTarget = accountName.trim();
+    return enqueueSettingsMutation(async () => {
+      const current = get().settings;
+      if (current.accounts.length <= 1) {
+        throw new Error('至少需保留 1 個帳戶');
+      }
+      console.log(`[LedgerStore/removeAccountCascade] Request - Account:${cleanTarget}`);
+      const res = await ApiService.deleteAccountCascade(cleanTarget);
+      await syncSettingsAndTransactions((filters) =>
+        filters.account.trim() === cleanTarget ? { ...filters, account: 'ALL' } : filters,
+      );
+      return res;
     });
-    return res;
   },
 
   addCategory: async (categoryName: string) => {
     const clean = categoryName.trim();
     if (!clean) throw new Error('請輸入分類名稱');
-    const current = get().settings;
-    if (current.categories.includes(clean)) {
-      throw new Error(`分類「${clean}」已存在`);
-    }
-    const nextCategories = [...current.categories, clean];
-    console.log(`[LedgerStore/addCategory] Request - Category:${clean}`);
-    const res = await ApiService.saveCustomSettings({
-      ...current,
-      categories: nextCategories,
+    return enqueueSettingsMutation(async () => {
+      const current = get().settings;
+      if (current.categories.includes(clean)) {
+        throw new Error(`分類「${clean}」已存在`);
+      }
+      const nextCategories = [...current.categories, clean];
+      console.log(`[LedgerStore/addCategory] Request - Category:${clean}`);
+      const res = await ApiService.saveCustomSettings({
+        ...current,
+        categories: nextCategories,
+      });
+      await syncSettings();
+      return res;
     });
-    const updatedSettings = await ApiService.getCustomSettings();
-    set({ settings: updatedSettings });
-    return res;
   },
 
   renameCategory: async (oldName: string, newName: string) => {
     const oldClean = oldName.trim();
     const newClean = newName.trim();
-    console.log(`[LedgerStore/renameCategory] Request - ${oldClean} -> ${newClean}`);
-    const res = await ApiService.renameCategory(oldClean, newClean);
-    const [updatedSettings, transactions] = await Promise.all([
-      ApiService.getCustomSettings(),
-      ApiService.getSheetData(true),
-    ]);
-    set((state) => {
-      const nextFilters =
-        state.filters.category === oldClean
-          ? { ...state.filters, category: newClean }
-          : state.filters;
-      return {
-        settings: updatedSettings,
-        transactions,
-        filters: nextFilters,
-        filteredTransactions: filterTransactions(transactions, nextFilters),
-      };
+    return enqueueSettingsMutation(async () => {
+      console.log(`[LedgerStore/renameCategory] Request - ${oldClean} -> ${newClean}`);
+      const res = await ApiService.renameCategory(oldClean, newClean);
+      await syncSettingsAndTransactions((filters) =>
+        filters.category.trim() === oldClean ? { ...filters, category: newClean } : filters,
+      );
+      return res;
     });
-    return res;
   },
 
   mergeCategories: async (sourceCategory: string, targetCategory: string) => {
     const sourceClean = sourceCategory.trim();
     const targetClean = targetCategory.trim();
-    console.log(`[LedgerStore/mergeCategories] Request - ${sourceClean} -> ${targetClean}`);
-    const res = await ApiService.mergeCategories(sourceClean, targetClean);
-    const [updatedSettings, transactions] = await Promise.all([
-      ApiService.getCustomSettings(),
-      ApiService.getSheetData(true),
-    ]);
-    set((state) => {
-      const nextFilters =
-        state.filters.category === sourceClean
-          ? { ...state.filters, category: targetClean }
-          : state.filters;
-      return {
-        settings: updatedSettings,
-        transactions,
-        filters: nextFilters,
-        filteredTransactions: filterTransactions(transactions, nextFilters),
-      };
+    return enqueueSettingsMutation(async () => {
+      console.log(`[LedgerStore/mergeCategories] Request - ${sourceClean} -> ${targetClean}`);
+      const res = await ApiService.mergeCategories(sourceClean, targetClean);
+      await syncSettingsAndTransactions((filters) =>
+        filters.category.trim() === sourceClean ? { ...filters, category: targetClean } : filters,
+      );
+      return res;
     });
-    return res;
   },
 
   removeCategoryCascade: async (categoryName: string) => {
-    const current = get().settings;
-    if (current.categories.length <= 1) {
-      throw new Error('至少需保留 1 個分類');
-    }
-    console.log(`[LedgerStore/removeCategoryCascade] Request - Category:${categoryName}`);
-    const res = await ApiService.deleteCategoryCascade(categoryName);
-    const [updatedSettings, transactions] = await Promise.all([
-      ApiService.getCustomSettings(),
-      ApiService.getSheetData(true),
-    ]);
-    set((state) => {
-      const nextFilters =
-        state.filters.category === categoryName
-          ? { ...state.filters, category: 'ALL' }
-          : state.filters;
-      return {
-        settings: updatedSettings,
-        transactions,
-        filters: nextFilters,
-        filteredTransactions: filterTransactions(transactions, nextFilters),
-      };
+    const cleanTarget = categoryName.trim();
+    return enqueueSettingsMutation(async () => {
+      const current = get().settings;
+      if (current.categories.length <= 1) {
+        throw new Error('至少需保留 1 個分類');
+      }
+      console.log(`[LedgerStore/removeCategoryCascade] Request - Category:${cleanTarget}`);
+      const res = await ApiService.deleteCategoryCascade(cleanTarget);
+      await syncSettingsAndTransactions((filters) =>
+        filters.category.trim() === cleanTarget ? { ...filters, category: 'ALL' } : filters,
+      );
+      return res;
     });
-    return res;
   },
 
   importTransactions: async (
@@ -395,44 +542,40 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
   ) => {
     console.log(`[LedgerStore/importTransactions] Request - Mode:${mode}, Count:${items.length}`);
     const res = await ApiService.importTransactions(items, mode);
-    const [updatedSettings, transactions] = await Promise.all([
-      ApiService.getCustomSettings(),
-      ApiService.getSheetData(true),
-    ]);
-    set((state) => ({
-      settings: updatedSettings,
-      transactions,
-      filteredTransactions: filterTransactions(transactions, state.filters),
-    }));
+    await syncSettingsAndTransactions();
     return res;
   },
 
   updateSettings: async (patch: Partial<CustomSettings>) => {
-    const merged: CustomSettings = {
-      ...get().settings,
-      ...patch,
-    };
-    console.log('[LedgerStore/updateSettings] Request - Updating custom settings');
-    const res = await ApiService.saveCustomSettings(merged);
-    const updatedSettings = await ApiService.getCustomSettings();
-    set({
-      settings: updatedSettings,
-      baseCurrency: (updatedSettings.baseCurrency || get().baseCurrency) as CurrencyCode,
+    return enqueueSettingsMutation(async () => {
+      const merged: CustomSettings = {
+        ...get().settings,
+        ...patch,
+      };
+      console.log('[LedgerStore/updateSettings] Request - Updating custom settings');
+      const res = await ApiService.saveCustomSettings(merged);
+      await syncSettings(true);
+      return res;
     });
-    return res;
   },
 
   syncExchangeRates: async () => {
+    const myEpoch = ++fxApplyEpoch;
+    fxSyncInFlightCount += 1;
     set({ isSyncingFX: true });
     console.log('[LedgerStore/syncExchangeRates] Start - Fetching live FX rates');
     try {
       const exchangeRates = await ApiService.getExchangeRates();
-      set({ exchangeRates, isSyncingFX: false });
+      if (fxApplyEpoch === myEpoch) {
+        set({ exchangeRates });
+      }
       console.log(`[LedgerStore/syncExchangeRates] Done - Updated:${exchangeRates.updated}`);
       return exchangeRates;
-    } catch (err) {
-      set({ isSyncingFX: false });
-      throw err;
+    } finally {
+      fxSyncInFlightCount = Math.max(0, fxSyncInFlightCount - 1);
+      if (fxSyncInFlightCount === 0) {
+        set({ isSyncingFX: false });
+      }
     }
   },
 
@@ -470,4 +613,5 @@ export const useLedgerStore = create<LedgerState>((set, get) => ({
       throw err;
     }
   },
-}));
+};
+});

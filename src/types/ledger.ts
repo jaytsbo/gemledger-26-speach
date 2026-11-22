@@ -57,7 +57,6 @@ export interface CustomSettings {
   currencies: CurrencyCode[];
   baseCurrency: CurrencyCode;
   accountIcons?: Record<string, string>;
-  aiProxyUrl?: string;
   simulate503?: boolean;
   themeMode?: 'light' | 'dark' | 'system';
 }
@@ -79,6 +78,24 @@ export interface AIParsedDraft {
   note: string;
 }
 
+export type GeminiFailureCode =
+  | 'KEY_MISSING'
+  | 'SIMULATE_503'
+  | 'AUTH_INVALID_KEY'
+  | 'RATE_LIMIT_429'
+  | 'TIMEOUT'
+  | 'NETWORK_ERROR'
+  | 'BAD_REQUEST_400'
+  | 'PARSE_ERROR'
+  | 'SERVER_503';
+
+export interface GeminiConnectionTestResult {
+  ok: boolean;
+  status?: number;
+  code: 'OK' | GeminiFailureCode;
+  message: string;
+}
+
 export interface AIBookkeeperResponse {
   reply: string;
   parsedTransactions: AIParsedDraft[];
@@ -88,23 +105,26 @@ export interface AIBookkeeperResponse {
   modelUsed?: string;
 }
 
+export interface AiChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  imageUri?: string;
+  audioDurationSec?: number;
+  drafts?: AIParsedDraft[];
+  savedIndices?: number[];
+  isFallback?: boolean;
+  fallbackReason?: string;
+  modelUsed?: string;
+  createdAt?: string;
+}
+
 export interface KPIStats {
   netWorth: number;
   realIncome: number;
   realExpense: number;
   netCashflow: number;
-  foodAmount: number;
-  foodRatio: number; // Percentage 0..100
   transactionCount: number;
-}
-
-export interface CategoryStat {
-  category: string;
-  amount: number;
-  percentage: number;
-  count: number;
-  color: string;
-  icon: string;
 }
 
 export interface AccountStat {

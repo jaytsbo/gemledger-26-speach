@@ -10,6 +10,8 @@ import {
   View,
 } from 'react-native';
 import { ChevronLeft, X } from 'lucide-react-native';
+import { HudReticle, MONO_FONT } from '@/components/ui/HudReticle';
+import { HUD_RADIUS, HUD_RADIUS_LG } from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 
 interface SettingsModalFrameProps {
@@ -21,6 +23,7 @@ interface SettingsModalFrameProps {
   headerRight?: React.ReactNode;
   children: React.ReactNode;
   scrollable?: boolean;
+  accentVariant?: 'primary' | 'accent';
 }
 
 /**
@@ -36,8 +39,11 @@ export function SettingsModalFrame({
   headerRight,
   children,
   scrollable = true,
+  accentVariant = 'primary',
 }: SettingsModalFrameProps) {
-  const { colors } = useAppTheme();
+  const { colors, isDark } = useAppTheme();
+  const accentColor = accentVariant === 'accent' ? colors.accent : colors.primary;
+  const accentGlow = accentVariant === 'accent' ? colors.accentGlow : colors.primaryGlow;
 
   return (
     <Modal
@@ -56,21 +62,40 @@ export function SettingsModalFrame({
             styles.sheet,
             {
               backgroundColor: colors.card,
-              borderColor: colors.cardBorder,
+              borderTopColor: accentColor,
+              borderLeftColor: colors.cardBorder,
+              borderRightColor: colors.cardBorder,
+              shadowColor: isDark ? accentGlow : colors.shadow,
+              shadowOpacity: isDark ? 0.55 : 0.16,
             },
           ]}
         >
-          <View style={[styles.header, { borderBottomColor: colors.divider }]}>
+          <View
+            style={[
+              styles.header,
+              {
+                backgroundColor: colors.surface,
+                borderBottomColor: colors.divider,
+              },
+            ]}
+          >
             <View style={styles.headerLeft}>
               {onBack ? (
                 <Pressable
                   onPress={onBack}
                   hitSlop={10}
-                  style={[styles.iconBtn, { backgroundColor: colors.chipBg }]}
+                  style={[
+                    styles.iconBtn,
+                    {
+                      backgroundColor: colors.surfaceElevated,
+                      borderColor: colors.border,
+                    },
+                  ]}
                 >
-                  <ChevronLeft size={18} color={colors.text} />
+                  <ChevronLeft size={18} color={accentColor} />
                 </Pressable>
               ) : null}
+              <View style={[styles.titleAccentBar, { backgroundColor: accentColor }]} />
               <View style={styles.titleWrap}>
                 <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
                   {title}
@@ -91,9 +116,15 @@ export function SettingsModalFrame({
               <Pressable
                 onPress={onClose}
                 hitSlop={10}
-                style={[styles.iconBtn, { backgroundColor: colors.chipBg }]}
+                style={[
+                  styles.iconBtn,
+                  {
+                    backgroundColor: colors.surfaceElevated,
+                    borderColor: colors.border,
+                  },
+                ]}
               >
-                <X size={18} color={colors.textSecondary} />
+                <X size={17} color={colors.textSecondary} />
               </Pressable>
             </View>
           </View>
@@ -109,6 +140,8 @@ export function SettingsModalFrame({
           ) : (
             <View style={styles.scrollBody}>{children}</View>
           )}
+
+          <HudReticle variant={accentVariant} inset={2} />
         </View>
       </KeyboardAvoidingView>
     </Modal>
@@ -118,20 +151,24 @@ export function SettingsModalFrame({
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.56)',
+    backgroundColor: 'rgba(2, 6, 23, 0.72)',
     justifyContent: 'flex-end',
   },
   backdropDismiss: {
     flex: 1,
   },
   sheet: {
+    position: 'relative',
     maxHeight: '88%',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderTopWidth: 1,
+    borderTopLeftRadius: HUD_RADIUS_LG,
+    borderTopRightRadius: HUD_RADIUS_LG,
+    borderTopWidth: 1.5,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     overflow: 'hidden',
+    shadowOffset: { width: 0, height: -4 },
+    shadowRadius: 16,
+    elevation: 10,
   },
   header: {
     flexDirection: 'row',
@@ -149,17 +186,26 @@ const styles = StyleSheet.create({
     gap: 10,
     minWidth: 0,
   },
+  titleAccentBar: {
+    width: 3,
+    height: 18,
+    borderRadius: 2,
+  },
   titleWrap: {
     flex: 1,
     minWidth: 0,
   },
   title: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.4,
   },
   subtitle: {
-    fontSize: 12,
+    fontSize: 11,
     marginTop: 2,
+    fontFamily: MONO_FONT,
+    fontVariant: ['tabular-nums'],
   },
   headerActions: {
     flexDirection: 'row',
@@ -169,7 +215,8 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 32,
     height: 32,
-    borderRadius: 10,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },

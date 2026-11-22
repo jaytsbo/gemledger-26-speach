@@ -2,7 +2,7 @@
   "expo": {
     "name": "GemLedger-26",
     "slug": "gemledger-26",
-    "version": "2.0.1",
+    "version": "2.1.0",
     "orientation": "portrait",
     "scheme": "gemledger",
     "userInterfaceStyle": "automatic",
@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "com.gemledger.app",
-      "versionCode": 2,
+      "versionCode": 7,
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES",

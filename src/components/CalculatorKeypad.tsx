@@ -1,8 +1,10 @@
-import * as Haptics from 'expo-haptics';
 import { Delete } from 'lucide-react-native';
 import React, { useCallback } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { HUD_RADIUS } from '../theme/colors';
 import { useAppTheme } from '../theme/ThemeContext';
+import { MONO_FONT } from './ui/HudReticle';
+import { SpringPressable } from './ui/SpringPressable';
 
 export interface CalculatorKeypadProps {
   expression: string;
@@ -47,37 +49,67 @@ const KEY_ROWS: KeyConfig[][] = [
   ],
 ];
 
+const MAX_EXPRESSION_LENGTH = 40;
+const VALID_NUMBER_TOKEN_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+
+function findLastOperatorIndex(expr: string): number {
+  for (let i = expr.length - 1; i > 0; i -= 1) {
+    const ch = expr[i];
+    if ((ch === '+' || ch === '-') && expr[i - 1] !== 'e' && expr[i - 1] !== 'E') {
+      return i;
+    }
+  }
+  return -1;
+}
+
 /**
  * Safely evaluates a simple inline arithmetic expression containing +, -, digits, and decimals.
+ * Preserves scientific notation tokens (e.g. 1e+21, 1e-7) without splitting on the exponent sign.
  */
 export function evaluateArithmeticExpression(expr: string): number {
-  const sanitized = (expr || '').replace(/\s+/g, '').replace(/[+\-.]+$/, '');
+  const sanitized = (expr || '').replace(/\s+/g, '').replace(/[+\-.eE]+$/, '');
   if (!sanitized) return 0;
 
-  const tokens = sanitized.match(/[+-]?[^+-]+/g);
-  if (!tokens) return 0;
+  const tokens: string[] = [];
+  let tokenStart = 0;
+  for (let i = 1; i < sanitized.length; i += 1) {
+    const ch = sanitized[i];
+    if ((ch === '+' || ch === '-') && sanitized[i - 1] !== 'e' && sanitized[i - 1] !== 'E') {
+      tokens.push(sanitized.slice(tokenStart, i));
+      tokenStart = i;
+    }
+  }
+  tokens.push(sanitized.slice(tokenStart));
 
   let total = 0;
   for (const token of tokens) {
-    const parsed = parseFloat(token);
+    if (!VALID_NUMBER_TOKEN_RE.test(token)) continue;
+    const parsed = Number(token);
     if (Number.isFinite(parsed)) {
       total += parsed;
     }
   }
 
+  if (!Number.isFinite(total)) return 0;
+  if (Math.abs(total) >= 1e12) {
+    return Object.is(total, -0) ? 0 : total;
+  }
   const rounded = Math.round(total * 10000) / 10000;
   return Object.is(rounded, -0) ? 0 : rounded;
 }
 
-export function formatNumericExpression(num: number): string {
-  if (!Number.isFinite(num) || num === 0) return '0';
-  const rounded = Math.round(num * 100) / 100;
-  return String(rounded);
-}
-
-function triggerLightHaptic(): void {
-  if (Platform.OS === 'web') return;
-  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+export function formatNumericExpression(num: number, maxDecimals: number = 2): string {
+  if (!Number.isFinite(num) || Math.abs(num) < 1e-9) return '0';
+  const factor = Math.pow(10, maxDecimals);
+  const rounded = Math.abs(num) < 1e12 ? Math.round(num * factor) / factor : num;
+  if (!Number.isFinite(rounded) || Math.abs(rounded) < 1e-9) return '0';
+  if (Math.abs(rounded) >= 1e15) {
+    return rounded.toLocaleString('en-US', {
+      useGrouping: false,
+      maximumFractionDigits: 0,
+    });
+  }
+  return rounded.toFixed(maxDecimals).replace(/\.?0+$/, '');
 }
 
 export function CalculatorKeypad({
@@ -87,13 +119,12 @@ export function CalculatorKeypad({
   accentColor,
   disabled = false,
 }: CalculatorKeypadProps) {
-  const { colors, isDark } = useAppTheme();
+  const { colors } = useAppTheme();
   const equalsBg = accentColor || colors.primary;
 
   const handleKeyPress = useCallback(
     (key: string) => {
       if (disabled) return;
-      triggerLightHaptic();
 
       const current = expression && expression.length > 0 ? expression : '0';
 
@@ -104,7 +135,8 @@ export function CalculatorKeypad({
       }
 
       if (key === 'BACKSPACE') {
-        const next = current.length <= 1 ? '0' : current.slice(0, -1);
+        let next = current.length <= 1 ? '0' : current.slice(0, -1);
+        next = next.replace(/[eE][+-]?$/, '');
         const finalExpr = next === '-' || next === '+' || next === '' ? '0' : next;
         onExpressionChange(finalExpr, evaluateArithmeticExpression(finalExpr));
         return;
@@ -124,35 +156,43 @@ export function CalculatorKeypad({
       if (key === '+' || key === '-') {
         const lastChar = current[current.length - 1];
         if (lastChar === '+' || lastChar === '-') {
+          if (current.length > 1 && (current[current.length - 2] === 'e' || current[current.length - 2] === 'E')) {
+            return;
+          }
           const replaced = `${current.slice(0, -1)}${key}`;
           onExpressionChange(replaced, evaluateArithmeticExpression(replaced));
           return;
         }
         const cleaned = lastChar === '.' ? current.slice(0, -1) : current;
+        if (cleaned.length >= MAX_EXPRESSION_LENGTH) return;
         const next = `${cleaned}${key}`;
         onExpressionChange(next, evaluateArithmeticExpression(next));
         return;
       }
 
       if (key === '.') {
-        const lastOpIdx = Math.max(current.lastIndexOf('+'), current.lastIndexOf('-'));
+        const lastOpIdx = findLastOperatorIndex(current);
         const activeSegment = current.slice(lastOpIdx + 1);
-        if (activeSegment.includes('.')) return;
+        if (activeSegment.includes('.') || /[eE]/.test(activeSegment)) return;
 
-        const next =
-          activeSegment === '' ? `${current}0.` : `${current}.`;
+        const appendStr = activeSegment === '' ? '0.' : '.';
+        if (current.length + appendStr.length > MAX_EXPRESSION_LENGTH) return;
+        const next = `${current}${appendStr}`;
         onExpressionChange(next, evaluateArithmeticExpression(next));
         return;
       }
 
       // Digits 0-9
-      const lastOpIdx = Math.max(current.lastIndexOf('+'), current.lastIndexOf('-'));
+      const lastOpIdx = findLastOperatorIndex(current);
       const activeSegment = current.slice(lastOpIdx + 1);
 
       let next = current;
-      if (activeSegment === '0') {
+      if (/[eE]/.test(activeSegment)) {
+        return;
+      } else if (activeSegment === '0') {
         next = `${current.slice(0, lastOpIdx + 1)}${key}`;
       } else {
+        if (current.length >= MAX_EXPRESSION_LENGTH) return;
         if (activeSegment.includes('.')) {
           const [, decimals = ''] = activeSegment.split('.');
           if (decimals.length >= 2) return;
@@ -179,37 +219,42 @@ export function CalculatorKeypad({
             const bg = isEquals
               ? equalsBg
               : isOperator
-                ? colors.primaryLight
+                ? colors.accentBg
                 : isAction
-                  ? isDark
-                    ? colors.surfaceElevated
-                    : '#E2E8F0'
-                  : isDark
-                    ? colors.card
-                    : '#F8FAFC';
+                  ? colors.surfaceElevated
+                  : colors.card;
+
+            const borderColor = isEquals
+              ? equalsBg
+              : isOperator
+                ? colors.accent
+                : colors.cardBorder;
 
             const textColor = isEquals
-              ? '#FFFFFF'
+              ? equalsBg === colors.primary
+                ? colors.onPrimary
+                : '#FFFFFF'
               : isOperator
-                ? colors.primary
+                ? colors.accent
                 : item.value === 'AC'
                   ? colors.expense
                   : colors.text;
 
             return (
-              <Pressable
+              <SpringPressable
                 key={item.value}
                 disabled={disabled}
+                pressedScale={0.91}
+                haptic="selection"
                 onPress={() => handleKeyPress(item.value)}
                 accessibilityRole="button"
                 accessibilityLabel={item.label}
-                style={({ pressed }) => [
+                style={[
                   styles.keyButton,
                   {
                     backgroundColor: bg,
-                    borderColor: isEquals ? equalsBg : colors.border,
-                    opacity: disabled ? 0.5 : pressed ? 0.72 : 1,
-                    transform: [{ scale: pressed ? 0.96 : 1 }],
+                    borderColor,
+                    opacity: disabled ? 0.5 : 1,
                   },
                 ]}
               >
@@ -228,7 +273,7 @@ export function CalculatorKeypad({
                     {item.label}
                   </Text>
                 )}
-              </Pressable>
+              </SpringPressable>
             );
           })}
         </View>
@@ -252,13 +297,14 @@ const styles = StyleSheet.create({
   keyButton: {
     flex: 1,
     height: 48,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   keyText: {
     fontSize: 20,
+    fontFamily: MONO_FONT,
     fontVariant: ['tabular-nums'],
   },
 });

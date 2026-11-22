@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -7,10 +7,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { AlertTriangle, GitMerge, Pencil, Plus, Trash2 } from 'lucide-react-native';
+import { AlertTriangle, CheckCircle2, GitMerge, Pencil, Plus, Trash2 } from 'lucide-react-native';
 import { LedgerIcon } from '@/components/LedgerIcon';
+import { MONO_FONT } from '@/components/ui/HudReticle';
 import { useLedgerStore } from '@/store/useLedgerStore';
-import { getCategoryMeta } from '@/theme/colors';
+import { getCategoryMeta, HUD_RADIUS } from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { SettingsModalFrame } from './SettingsModalFrame';
 import { FeedbackState } from './settingsHelpers';
@@ -26,6 +27,8 @@ type CategorySubview =
   | { kind: 'rename'; category: string }
   | { kind: 'delete'; category: string; linkedCount: number }
   | { kind: 'merge' };
+
+const PROTECTED_SYSTEM_CATEGORIES = new Set(['內部轉帳', '初始資產', '代墊款']);
 
 export function CategoryManagerModal({
   visible,
@@ -45,8 +48,9 @@ export function CategoryManagerModal({
   const [renameInput, setRenameInput] = useState('');
   const [mergeSource, setMergeSource] = useState('');
   const [mergeTarget, setMergeTarget] = useState('');
-  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [inlineFeedback, setInlineFeedback] = useState<FeedbackState | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+  const isBusyRef = useRef(false);
 
   useEffect(() => {
     if (!visible) {
@@ -55,7 +59,8 @@ export function CategoryManagerModal({
       setRenameInput('');
       setMergeSource('');
       setMergeTarget('');
-      setInlineError(null);
+      setInlineFeedback(null);
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   }, [visible]);
@@ -69,34 +74,55 @@ export function CategoryManagerModal({
     return map;
   }, [transactions]);
 
+  const mergeableSources = useMemo(
+    () => settings.categories.filter((c) => !PROTECTED_SYSTEM_CATEGORIES.has(c)),
+    [settings.categories],
+  );
+
   const handleAdd = async () => {
+    if (isBusyRef.current) return;
     const clean = newName.trim();
     if (!clean) {
-      setInlineError('請輸入分類名稱');
+      setInlineFeedback({ type: 'error', message: '請輸入分類名稱' });
       return;
     }
-    setInlineError(null);
+    isBusyRef.current = true;
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       console.log(`[Settings/CategoryManagerModal] Add - name=${clean}`);
       await addCategory(clean);
       setNewName('');
-      onFeedback({ type: 'success', message: `已新增分類「${clean}」` });
+      const fb: FeedbackState = { type: 'success', message: `已新增分類「${clean}」` };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '新增分類失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '新增分類失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const handleConfirmRename = async () => {
-    if (subview.kind !== 'rename') return;
-    const clean = renameInput.trim();
-    if (!clean) {
-      setInlineError('新分類名稱不可為空');
+    if (subview.kind !== 'rename' || isBusyRef.current) return;
+    if (PROTECTED_SYSTEM_CATEGORIES.has(subview.category)) {
+      setInlineFeedback({
+        type: 'error',
+        message: `「${subview.category}」為系統保留分類，不可更名`,
+      });
       return;
     }
-    setInlineError(null);
+    const clean = renameInput.trim();
+    if (!clean) {
+      setInlineFeedback({ type: 'error', message: '新分類名稱不可為空' });
+      return;
+    }
+    isBusyRef.current = true;
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       console.log(
@@ -104,20 +130,34 @@ export function CategoryManagerModal({
       );
       await renameCategory(subview.category, clean);
       setSubview({ kind: 'list' });
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'success',
         message: `已將分類「${subview.category}」更名為「${clean}」`,
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '更名失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '更名失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const handleConfirmDelete = async () => {
-    if (subview.kind !== 'delete') return;
-    setInlineError(null);
+    if (subview.kind !== 'delete' || isBusyRef.current) return;
+    if (PROTECTED_SYSTEM_CATEGORIES.has(subview.category)) {
+      setInlineFeedback({
+        type: 'error',
+        message: `「${subview.category}」為系統保留分類，不可刪除`,
+      });
+      return;
+    }
+    isBusyRef.current = true;
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       console.log(
@@ -125,31 +165,55 @@ export function CategoryManagerModal({
       );
       const res = await removeCategoryCascade(subview.category);
       setSubview({ kind: 'list' });
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'success',
         message: `已刪除分類「${subview.category}」及 ${res.deletedCount ?? subview.linkedCount} 筆關聯交易`,
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '刪除失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '刪除失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const openMergeSubview = () => {
-    setInlineError(null);
-    const cats = settings.categories;
-    setMergeSource(cats[0] || '');
-    setMergeTarget(cats[1] || '');
+    if (isBusyRef.current) return;
+    if (mergeableSources.length === 0) {
+      setInlineFeedback({
+        type: 'error',
+        message: '目前沒有可被合併的非保留分類',
+      });
+      return;
+    }
+    setInlineFeedback(null);
+    const defaultSrc = mergeableSources[0] || '';
+    const defaultTarget = settings.categories.find((c) => c !== defaultSrc) || '';
+    setMergeSource(defaultSrc);
+    setMergeTarget(defaultTarget);
     setSubview({ kind: 'merge' });
   };
 
   const handleConfirmMerge = async () => {
+    if (isBusyRef.current) return;
     if (!mergeSource || !mergeTarget || mergeSource === mergeTarget) {
-      setInlineError('請選擇兩個不同的來源與目標分類');
+      setInlineFeedback({ type: 'error', message: '請選擇兩個不同的來源與目標分類' });
       return;
     }
-    setInlineError(null);
+    if (PROTECTED_SYSTEM_CATEGORIES.has(mergeSource)) {
+      setInlineFeedback({
+        type: 'error',
+        message: `「${mergeSource}」為系統保留分類，不可作為合併來源`,
+      });
+      return;
+    }
+    isBusyRef.current = true;
+    setInlineFeedback(null);
     setIsBusy(true);
     try {
       const affected = categoryCounts[mergeSource] || 0;
@@ -158,31 +222,45 @@ export function CategoryManagerModal({
       );
       await mergeCategories(mergeSource, mergeTarget);
       setSubview({ kind: 'list' });
-      onFeedback({
+      const fb: FeedbackState = {
         type: 'success',
         message: `已將「${mergeSource}」（${affected} 筆）合併至「${mergeTarget}」`,
-      });
+      };
+      setInlineFeedback(fb);
+      onFeedback(fb);
     } catch (err) {
-      setInlineError(err instanceof Error ? err.message : '合併分類失敗');
+      setInlineFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : '合併分類失敗',
+      });
     } finally {
+      isBusyRef.current = false;
       setIsBusy(false);
     }
   };
 
   const modalTitle =
     subview.kind === 'rename'
-      ? `更名分類：${subview.category}`
+      ? `更名分類 · ${subview.category}`
       : subview.kind === 'delete'
-        ? `刪除分類：${subview.category}`
+        ? `刪除分類 · ${subview.category}`
         : subview.kind === 'merge'
           ? '合併分類'
-          : '管理分類';
+          : '分類管理';
 
   const headerRight =
     subview.kind === 'list' && settings.categories.length >= 2 ? (
       <Pressable
+        disabled={isBusy}
         onPress={openMergeSubview}
-        style={[styles.mergeHeaderBtn, { backgroundColor: colors.primaryLight }]}
+        style={[
+          styles.mergeHeaderBtn,
+          {
+            backgroundColor: colors.primaryBg,
+            borderColor: colors.primary,
+            opacity: isBusy ? 0.6 : 1,
+          },
+        ]}
       >
         <GitMerge size={14} color={colors.primary} />
         <Text style={[styles.mergeHeaderText, { color: colors.primary }]}>合併分類</Text>
@@ -200,21 +278,45 @@ export function CategoryManagerModal({
       onBack={
         subview.kind !== 'list'
           ? () => {
-              setInlineError(null);
+              setInlineFeedback(null);
               setSubview({ kind: 'list' });
             }
           : undefined
       }
       headerRight={headerRight}
     >
-      {inlineError ? (
+      {inlineFeedback ? (
         <View
           style={[
             styles.errorBox,
-            { backgroundColor: colors.expenseBg, borderColor: colors.expense },
+            {
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              backgroundColor:
+                inlineFeedback.type === 'success' ? colors.incomeBg : colors.expenseBg,
+              borderColor:
+                inlineFeedback.type === 'success' ? colors.income : colors.expense,
+            },
           ]}
         >
-          <Text style={[styles.errorText, { color: colors.expense }]}>{inlineError}</Text>
+          {inlineFeedback.type === 'success' ? (
+            <CheckCircle2 size={15} color={colors.income} />
+          ) : (
+            <AlertTriangle size={15} color={colors.expense} />
+          )}
+          <Text
+            style={[
+              styles.errorText,
+              {
+                flex: 1,
+                color:
+                  inlineFeedback.type === 'success' ? colors.income : colors.expense,
+              },
+            ]}
+          >
+            {inlineFeedback.message}
+          </Text>
         </View>
       ) : null}
 
@@ -224,6 +326,7 @@ export function CategoryManagerModal({
             <TextInput
               value={newName}
               onChangeText={setNewName}
+              editable={!isBusy}
               placeholder="輸入新分類名稱（如：寵物）"
               placeholderTextColor={colors.textMuted}
               style={[
@@ -239,9 +342,12 @@ export function CategoryManagerModal({
             <Pressable
               onPress={handleAdd}
               disabled={isBusy}
-              style={[styles.addBtn, { backgroundColor: colors.primary }]}
+              style={[
+                styles.addBtn,
+                { backgroundColor: colors.primary, borderColor: colors.primary },
+              ]}
             >
-              <Plus size={18} color="#FFFFFF" />
+              <Plus size={18} color={colors.onPrimary} />
             </Pressable>
           </View>
 
@@ -249,6 +355,7 @@ export function CategoryManagerModal({
             {settings.categories.map((cat) => {
               const meta = getCategoryMeta(cat);
               const count = categoryCounts[cat] || 0;
+              const isProtected = PROTECTED_SYSTEM_CATEGORIES.has(cat);
               return (
                 <View
                   key={cat}
@@ -260,25 +367,59 @@ export function CategoryManagerModal({
                     },
                   ]}
                 >
-                  <View style={[styles.iconBox, { backgroundColor: meta.bgColor }]}>
+                  <View
+                    style={[
+                      styles.iconBox,
+                      { backgroundColor: meta.bgColor, borderColor: colors.border },
+                    ]}
+                  >
                     <LedgerIcon name={meta.icon} size={18} color={meta.color} />
                   </View>
                   <View style={styles.itemInfo}>
-                    <Text style={[styles.itemName, { color: colors.text }]} numberOfLines={1}>
-                      {cat}
-                    </Text>
+                    <View style={styles.itemNameRow}>
+                      <Text style={[styles.itemName, { color: colors.text }]} numberOfLines={1}>
+                        {cat}
+                      </Text>
+                      {isProtected ? (
+                        <View
+                          style={[
+                            styles.systemTag,
+                            { backgroundColor: colors.chipBg, borderColor: colors.border },
+                          ]}
+                        >
+                          <Text style={[styles.systemTagText, { color: colors.textMuted }]}>
+                            保留
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
                     <Text style={[styles.itemCount, { color: colors.textMuted }]}>
                       {count} 筆交易
                     </Text>
                   </View>
                   <View style={styles.itemActions}>
                     <Pressable
+                      disabled={isBusy}
                       onPress={() => {
-                        setInlineError(null);
+                        if (isProtected) {
+                          setInlineFeedback({
+                            type: 'error',
+                            message: `「${cat}」為系統保留分類，不可更名或刪除（用於計算淨資產與排除重複收支）`,
+                          });
+                          return;
+                        }
+                        setInlineFeedback(null);
                         setRenameInput(cat);
                         setSubview({ kind: 'rename', category: cat });
                       }}
-                      style={[styles.smallBtn, { backgroundColor: colors.chipBg }]}
+                      style={[
+                        styles.smallBtn,
+                        {
+                          backgroundColor: colors.chipBg,
+                          borderColor: colors.border,
+                          opacity: isProtected ? 0.55 : 1,
+                        },
+                      ]}
                     >
                       <Pencil size={13} color={colors.textSecondary} />
                       <Text style={[styles.smallBtnText, { color: colors.textSecondary }]}>
@@ -286,15 +427,33 @@ export function CategoryManagerModal({
                       </Text>
                     </Pressable>
                     <Pressable
+                      disabled={isBusy}
                       onPress={() => {
-                        if (settings.categories.length <= 1) {
-                          setInlineError('至少需保留 1 個分類，無法全部刪除');
+                        if (isProtected) {
+                          setInlineFeedback({
+                            type: 'error',
+                            message: `「${cat}」為系統保留分類，不可更名或刪除（用於計算淨資產與排除重複收支）`,
+                          });
                           return;
                         }
-                        setInlineError(null);
+                        if (settings.categories.length <= 1) {
+                          setInlineFeedback({
+                            type: 'error',
+                            message: '至少需保留 1 個分類，無法全部刪除',
+                          });
+                          return;
+                        }
+                        setInlineFeedback(null);
                         setSubview({ kind: 'delete', category: cat, linkedCount: count });
                       }}
-                      style={[styles.smallBtn, { backgroundColor: colors.expenseBg }]}
+                      style={[
+                        styles.smallBtn,
+                        {
+                          backgroundColor: colors.expenseBg,
+                          borderColor: colors.expense,
+                          opacity: isProtected ? 0.55 : 1,
+                        },
+                      ]}
                     >
                       <Trash2 size={13} color={colors.expense} />
                       <Text style={[styles.smallBtnText, { color: colors.expense }]}>
@@ -317,6 +476,7 @@ export function CategoryManagerModal({
           <TextInput
             value={renameInput}
             onChangeText={setRenameInput}
+            editable={!isBusy}
             placeholder="輸入新分類名稱"
             placeholderTextColor={colors.textMuted}
             autoFocus
@@ -333,12 +493,17 @@ export function CategoryManagerModal({
           <Pressable
             onPress={handleConfirmRename}
             disabled={isBusy}
-            style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: colors.primary, borderColor: colors.primary },
+            ]}
           >
             {isBusy ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={colors.onPrimary} />
             ) : (
-              <Text style={styles.primaryBtnText}>確認更名</Text>
+              <Text style={[styles.primaryBtnText, { color: colors.onPrimary }]}>
+                確認更名
+              </Text>
             )}
           </Pressable>
         </View>
@@ -361,12 +526,17 @@ export function CategoryManagerModal({
           <Pressable
             onPress={handleConfirmDelete}
             disabled={isBusy}
-            style={[styles.primaryBtn, { backgroundColor: colors.danger }]}
+            style={[
+              styles.primaryBtn,
+              { backgroundColor: colors.danger, borderColor: colors.danger },
+            ]}
           >
             {isBusy ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <Text style={styles.primaryBtnText}>確認連帶刪除</Text>
+              <Text style={[styles.primaryBtnText, { color: '#FFFFFF' }]}>
+                確認連帶刪除
+              </Text>
             )}
           </Pressable>
         </View>
@@ -374,16 +544,18 @@ export function CategoryManagerModal({
 
       {subview.kind === 'merge' ? (
         <View style={styles.subviewBox}>
-          <Text style={[styles.subviewLabel, { color: colors.text }]}>
-            1. 選擇要被合併（移除）的來源分類
+          <Text style={[styles.subviewLabel, { color: colors.primary }]}>
+            步驟 1：選擇要被合併（移除）的來源分類
           </Text>
           <View style={styles.chipGrid}>
-            {settings.categories.map((cat) => {
+            {mergeableSources.map((cat) => {
               const selected = mergeSource === cat;
               return (
                 <Pressable
                   key={`src-${cat}`}
+                  disabled={isBusy}
                   onPress={() => {
+                    if (isBusyRef.current) return;
                     setMergeSource(cat);
                     if (mergeTarget === cat) {
                       const next = settings.categories.find((c) => c !== cat) || '';
@@ -411,8 +583,8 @@ export function CategoryManagerModal({
             })}
           </View>
 
-          <Text style={[styles.subviewLabel, { color: colors.text }]}>
-            2. 選擇保留的目標分類
+          <Text style={[styles.subviewLabel, { color: colors.primary }]}>
+            步驟 2：選擇保留的目標分類
           </Text>
           <View style={styles.chipGrid}>
             {settings.categories
@@ -422,11 +594,15 @@ export function CategoryManagerModal({
                 return (
                   <Pressable
                     key={`dst-${cat}`}
-                    onPress={() => setMergeTarget(cat)}
+                    disabled={isBusy}
+                    onPress={() => {
+                      if (isBusyRef.current) return;
+                      setMergeTarget(cat);
+                    }}
                     style={[
                       styles.chip,
                       {
-                        backgroundColor: selected ? colors.primaryLight : colors.surfaceElevated,
+                        backgroundColor: selected ? colors.primaryBg : colors.surfaceElevated,
                         borderColor: selected ? colors.primary : colors.border,
                       },
                     ]}
@@ -463,14 +639,17 @@ export function CategoryManagerModal({
               styles.primaryBtn,
               {
                 backgroundColor: colors.primary,
+                borderColor: colors.primary,
                 opacity: isBusy ? 0.7 : 1,
               },
             ]}
           >
             {isBusy ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={colors.onPrimary} />
             ) : (
-              <Text style={styles.primaryBtnText}>確認合併分類</Text>
+              <Text style={[styles.primaryBtnText, { color: colors.onPrimary }]}>
+                確認合併分類
+              </Text>
             )}
           </Pressable>
         </View>
@@ -486,15 +665,17 @@ const styles = StyleSheet.create({
     gap: 5,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 10,
+    borderRadius: 6,
+    borderWidth: 1,
   },
   mergeHeaderText: {
     fontSize: 12,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
   },
   errorBox: {
     padding: 10,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   errorText: {
@@ -508,7 +689,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     height: 44,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     paddingHorizontal: 12,
     fontSize: 14,
@@ -516,7 +697,8 @@ const styles = StyleSheet.create({
   addBtn: {
     width: 44,
     height: 44,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -528,13 +710,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     padding: 10,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   iconBox: {
     width: 38,
     height: 38,
-    borderRadius: 12,
+    borderRadius: 6,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -542,13 +725,32 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  itemNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   itemName: {
     fontSize: 14,
     fontWeight: '800',
+    flexShrink: 1,
+  },
+  systemTag: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    borderWidth: 1,
+  },
+  systemTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    fontFamily: MONO_FONT,
   },
   itemCount: {
-    fontSize: 12,
-    marginTop: 1,
+    fontSize: 11,
+    marginTop: 2,
+    fontFamily: MONO_FONT,
+    fontVariant: ['tabular-nums'],
   },
   itemActions: {
     flexDirection: 'row',
@@ -560,7 +762,8 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingHorizontal: 9,
     paddingVertical: 6,
-    borderRadius: 9,
+    borderRadius: 6,
+    borderWidth: 1,
   },
   smallBtnText: {
     fontSize: 12,
@@ -570,12 +773,15 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   subviewLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.4,
   },
   subviewDesc: {
     fontSize: 13,
     lineHeight: 19,
+    fontVariant: ['tabular-nums'],
   },
   chipGrid: {
     flexDirection: 'row',
@@ -583,37 +789,41 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
-    paddingHorizontal: 11,
+    paddingHorizontal: 10,
     paddingVertical: 7,
-    borderRadius: 999,
+    borderRadius: 6,
     borderWidth: 1,
   },
   chipText: {
     fontSize: 12,
     fontWeight: '700',
+    fontFamily: MONO_FONT,
+    fontVariant: ['tabular-nums'],
   },
   mergePreviewBox: {
     padding: 12,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   primaryBtn: {
     height: 44,
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryBtnText: {
-    color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.4,
   },
   warningBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 10,
     padding: 12,
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   warningText: {
@@ -621,5 +831,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
 });

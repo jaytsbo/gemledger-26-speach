@@ -46,6 +46,79 @@ export const DEFAULT_EXCHANGE_RATES: ExchangeRates = {
   },
 };
 
+const CURRENCY_ALIASES: Record<string, CurrencyCode> = {
+  TWD: 'TWD',
+  NTD: 'TWD',
+  NT: 'TWD',
+  'NT$': 'TWD',
+  台幣: 'TWD',
+  新台幣: 'TWD',
+  臺幣: 'TWD',
+  新臺幣: 'TWD',
+  JPY: 'JPY',
+  'JP¥': 'JPY',
+  日圓: 'JPY',
+  日幣: 'JPY',
+  円: 'JPY',
+  USD: 'USD',
+  'US$': 'USD',
+  美元: 'USD',
+  美金: 'USD',
+  KRW: 'KRW',
+  韓元: 'KRW',
+  韓幣: 'KRW',
+  EUR: 'EUR',
+  歐元: 'EUR',
+  '€': 'EUR',
+  CNY: 'CNY',
+  RMB: 'CNY',
+  人民幣: 'CNY',
+  GBP: 'GBP',
+  英鎊: 'GBP',
+  '£': 'GBP',
+  HKD: 'HKD',
+  'HK$': 'HKD',
+  港幣: 'HKD',
+  港元: 'HKD',
+  SGD: 'SGD',
+  'S$': 'SGD',
+  新幣: 'SGD',
+  新加坡幣: 'SGD',
+  THB: 'THB',
+  泰銖: 'THB',
+  '฿': 'THB',
+  AUD: 'AUD',
+  'A$': 'AUD',
+  澳幣: 'AUD',
+  澳元: 'AUD',
+};
+
+export function normalizeCurrencyCode(raw: unknown, fallback: string = 'TWD'): string {
+  const clean = typeof raw === 'string' ? raw.trim() : '';
+  if (!clean) return fallback;
+  const upper = clean.toUpperCase();
+  if (CURRENCY_ALIASES[upper]) return CURRENCY_ALIASES[upper];
+  if (CURRENCY_ALIASES[clean]) return CURRENCY_ALIASES[clean];
+  if (/^[A-Z]{3}$/.test(upper)) return upper;
+  return fallback;
+}
+
+export function sanitizeRatesMap(rawRates: unknown): Record<string, number> | null {
+  if (!rawRates || typeof rawRates !== 'object' || Array.isArray(rawRates)) {
+    return null;
+  }
+  const clean: Record<string, number> = {};
+  for (const [rawKey, rawVal] of Object.entries(rawRates)) {
+    if (typeof rawVal === 'boolean' || rawVal === null || rawVal === '') continue;
+    const key = rawKey.trim().toUpperCase();
+    const num = Number(rawVal);
+    if (key && Number.isFinite(num) && num > 0) {
+      clean[key] = num;
+    }
+  }
+  return Object.keys(clean).length > 0 ? clean : null;
+}
+
 export function getCurrencySymbol(code?: string): string {
   const normalized = (code || 'TWD').trim().toUpperCase();
   return CURRENCY_SYMBOLS[normalized] || `${normalized} `;
@@ -65,16 +138,23 @@ function extractRatesMap(ratesInput?: RatesInput): Record<string, number> {
   return ratesInput as Record<string, number>;
 }
 
+function resolveValidRate(raw: unknown, fallbackRate: number): number {
+  const num = Number(raw);
+  if (Number.isFinite(num) && num > 0) return num;
+  return Number.isFinite(fallbackRate) && fallbackRate > 0 ? fallbackRate : 1;
+}
+
 export function convertCurrency(
   amount: number,
   fromCur: string,
   toCur: string,
   ratesInput?: RatesInput,
 ): number {
-  const num = Number(amount) || 0;
-  const from = (fromCur || 'TWD').trim().toUpperCase();
-  const to = (toCur || 'TWD').trim().toUpperCase();
-  if (from === to) return num;
+  const num = Number(amount);
+  if (!Number.isFinite(num)) return 0;
+  const from = (fromCur || 'TWD').trim().toUpperCase() || 'TWD';
+  const to = (toCur || 'TWD').trim().toUpperCase() || 'TWD';
+  if (from === to) return Object.is(num, -0) ? 0 : num;
 
   const rates = extractRatesMap(ratesInput);
   const hasNonTwdBase = Boolean(
@@ -86,18 +166,24 @@ export function convertCurrency(
   );
   const rawFromRate = Number(rates[from]);
   const rawToRate = Number(rates[to]);
-  const fromRate =
-    rawFromRate || (!hasNonTwdBase ? Number(DEFAULT_EXCHANGE_RATES.rates[from]) : 0) || 1;
-  const toRate =
-    rawToRate || (!hasNonTwdBase ? Number(DEFAULT_EXCHANGE_RATES.rates[to]) : 0) || 1;
+  const defaultFrom = !hasNonTwdBase ? Number(DEFAULT_EXCHANGE_RATES.rates[from]) : 0;
+  const defaultTo = !hasNonTwdBase ? Number(DEFAULT_EXCHANGE_RATES.rates[to]) : 0;
+  const fromRate = resolveValidRate(rawFromRate, defaultFrom);
+  const toRate = resolveValidRate(rawToRate, defaultTo);
 
-  if (!rawFromRate || !rawToRate) {
+  if (
+    !Number.isFinite(rawFromRate) ||
+    rawFromRate <= 0 ||
+    !Number.isFinite(rawToRate) ||
+    rawToRate <= 0
+  ) {
     console.log(
       `[currency/convertCurrency] Fallback - from=${from}, to=${to}, hasNonTwdBase=${hasNonTwdBase}, fromRate=${fromRate}, toRate=${toRate}`,
     );
   }
 
-  return (num / fromRate) * toRate;
+  const converted = (num / fromRate) * toRate;
+  return Number.isFinite(converted) ? (Object.is(converted, -0) ? 0 : converted) : 0;
 }
 
 const ZERO_DECIMAL_CURRENCIES = new Set(['JPY', 'KRW', 'TWD']);
@@ -107,10 +193,14 @@ export function formatMoney(
   currencyCode: string = 'TWD',
   includeSymbol: boolean = true,
 ): string {
-  const code = (currencyCode || 'TWD').trim().toUpperCase();
-  const num = Math.abs(Number(amount) || 0) < 0.000001 ? 0 : Number(amount) || 0;
+  const code = (currencyCode || 'TWD').trim().toUpperCase() || 'TWD';
+  const raw = Number(amount);
+  const safeRaw = Number.isFinite(raw) ? raw : 0;
   const sym = includeSymbol ? getCurrencySymbol(code) : '';
   const decimals = ZERO_DECIMAL_CURRENCIES.has(code) ? 0 : 2;
+  const factor = Math.pow(10, decimals);
+  const roundedAbs = Math.round(Math.abs(safeRaw) * factor) / factor;
+  const num = roundedAbs === 0 ? 0 : safeRaw < 0 ? -roundedAbs : roundedAbs;
   const formatted = Math.abs(num).toLocaleString('en-US', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,

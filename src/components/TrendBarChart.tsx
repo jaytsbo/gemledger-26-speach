@@ -7,16 +7,20 @@ import {
   Text,
   View,
 } from 'react-native';
-import { ChevronLeft } from 'lucide-react-native';
+import { ChevronLeft, X } from 'lucide-react-native';
 import Svg, {
   Circle,
   Defs,
   Line,
   LinearGradient,
-  Path,
+  RadialGradient,
+  Rect,
   Stop,
   Text as SvgText,
 } from 'react-native-svg';
+import { HudReticle, MONO_FONT } from './ui/HudReticle';
+import { SpringPressable } from './ui/SpringPressable';
+import { HUD_RADIUS, HUD_RADIUS_LG } from '../theme/colors';
 import { useAppTheme } from '../theme/ThemeContext';
 import { TrendPoint } from '../types/ledger';
 import { formatMoney } from '../utils/currency';
@@ -26,6 +30,8 @@ export interface TrendBarChartProps {
   granularity: 'day' | 'month';
   baseCurrency: string;
   isSingleDay?: boolean;
+  filterLabel?: string | null;
+  onClearFilter?: () => void;
   onScrubbingChange?: (scrubbing: boolean) => void;
   onSwipePrev?: () => void;
 }
@@ -46,12 +52,40 @@ export function TrendBarChart({
   granularity,
   baseCurrency,
   isSingleDay = false,
+  filterLabel = null,
+  onClearFilter,
   onScrubbingChange,
   onSwipePrev,
 }: TrendBarChartProps) {
-  const { colors } = useAppTheme();
+  const { colors, isDark } = useAppTheme();
   const [containerWidth, setContainerWidth] = useState(320);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [animProgress, setAnimProgress] = useState(1);
+
+  useEffect(() => {
+    let rafId: number | null = null;
+    const duration = 420;
+    const startTime = Date.now();
+    setAnimProgress(0);
+
+    const tick = () => {
+      const elapsed = Date.now() - startTime;
+      const t = Math.min(1, elapsed / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setAnimProgress(eased);
+      if (t < 1) {
+        rafId = requestAnimationFrame(tick);
+      }
+    };
+
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [data, granularity]);
 
   useEffect(() => {
     if (data.length === 0) {
@@ -81,16 +115,18 @@ export function TrendBarChart({
   const baseLineY = paddingTop + plotHeight;
   const yAxisWidth = 44;
   const plotWidth = Math.max(containerWidth - yAxisWidth, 180);
-  const plotPadX = 12;
+  const plotPadX = 10;
   const innerWidth = Math.max(plotWidth - plotPadX * 2, 1);
 
   const maxValue = useMemo(() => {
     let m = 0;
     for (const item of data) {
-      if (item.income > m) m = item.income;
-      if (item.expense > m) m = item.expense;
+      const inc = Number.isFinite(item.income) ? item.income : 0;
+      const exp = Number.isFinite(item.expense) ? item.expense : 0;
+      if (inc > m) m = inc;
+      if (exp > m) m = exp;
     }
-    return m > 0 ? m * 1.12 : 100;
+    return m > 0 && Number.isFinite(m) ? m * 1.12 : 100;
   }, [data]);
 
   const yTicks = useMemo(() => {
@@ -101,66 +137,49 @@ export function TrendBarChart({
     }));
   }, [maxValue, paddingTop, plotHeight]);
 
+  const slotWidth = innerWidth / Math.max(data.length, 1);
+  const barGap = slotWidth < 12 ? 1 : slotWidth < 22 ? 2 : 3;
+  const barWidth =
+    data.length === 1
+      ? 16
+      : Math.max(2, Math.min(12, (slotWidth * 0.78 - barGap) / 2));
+
   const plotPoints = useMemo(() => {
     if (data.length === 0) return [];
+    const safeMax = Number.isFinite(maxValue) && maxValue > 0 ? maxValue : 100;
     return data.map((point, index) => {
       const x =
         data.length === 1
           ? plotWidth / 2
-          : plotPadX + (index / (data.length - 1)) * innerWidth;
-      const incomeRatio = Math.min(Math.max(point.income, 0) / maxValue, 1);
-      const expenseRatio = Math.min(Math.max(point.expense, 0) / maxValue, 1);
+          : plotPadX + (index + 0.5) * slotWidth;
+      const rawIncome = Number.isFinite(point.income) ? Math.max(0, point.income) : 0;
+      const rawExpense = Number.isFinite(point.expense) ? Math.max(0, point.expense) : 0;
+      const incomeRatio = Math.min(rawIncome / safeMax, 1);
+      const expenseRatio = Math.min(rawExpense / safeMax, 1);
+      const incomeY =
+        paddingTop + plotHeight * (1 - (Number.isFinite(incomeRatio) ? incomeRatio : 0));
+      const expenseY =
+        paddingTop + plotHeight * (1 - (Number.isFinite(expenseRatio) ? expenseRatio : 0));
+      const incomeHeight = rawIncome > 0 ? Math.max(2, baseLineY - incomeY) : 0;
+      const expenseHeight = rawExpense > 0 ? Math.max(2, baseLineY - expenseY) : 0;
       return {
         point,
         index,
-        x,
-        incomeY: paddingTop + plotHeight * (1 - incomeRatio),
-        expenseY: paddingTop + plotHeight * (1 - expenseRatio),
+        x: Number.isFinite(x) ? x : plotWidth / 2,
+        incomeY: baseLineY - incomeHeight,
+        incomeHeight,
+        expenseY: baseLineY - expenseHeight,
+        expenseHeight,
       };
     });
-  }, [data, plotWidth, plotPadX, innerWidth, maxValue, paddingTop, plotHeight]);
-
-  const { incomeLinePath, incomeAreaPath, expenseLinePath, expenseAreaPath } =
-    useMemo(() => {
-      if (plotPoints.length < 2) {
-        return {
-          incomeLinePath: '',
-          incomeAreaPath: '',
-          expenseLinePath: '',
-          expenseAreaPath: '',
-        };
-      }
-      const incLine = plotPoints
-        .map(
-          (p, i) =>
-            `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.incomeY.toFixed(1)}`,
-        )
-        .join(' ');
-      const expLine = plotPoints
-        .map(
-          (p, i) =>
-            `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.expenseY.toFixed(1)}`,
-        )
-        .join(' ');
-
-      const firstX = plotPoints[0].x.toFixed(1);
-      const lastX = plotPoints[plotPoints.length - 1].x.toFixed(1);
-      const baseY = baseLineY.toFixed(1);
-
-      return {
-        incomeLinePath: incLine,
-        incomeAreaPath: `${incLine} L ${lastX} ${baseY} L ${firstX} ${baseY} Z`,
-        expenseLinePath: expLine,
-        expenseAreaPath: `${expLine} L ${lastX} ${baseY} L ${firstX} ${baseY} Z`,
-      };
-    }, [plotPoints, baseLineY]);
+  }, [data, plotWidth, plotPadX, slotWidth, maxValue, paddingTop, plotHeight, baseLineY]);
 
   const xLabelIndices = useMemo(() => {
     const n = data.length;
     if (n === 0) return new Set<number>();
     if (n === 1) return new Set<number>([0]);
 
-    const maxLabels = Math.max(2, Math.floor(innerWidth / 52));
+    const maxLabels = Math.max(2, Math.floor(innerWidth / 54));
     if (n <= maxLabels) {
       return new Set<number>(data.map((_, i) => i));
     }
@@ -190,17 +209,29 @@ export function TrendBarChart({
 
   const selectAtLocationX = (locationX: number) => {
     const { data: pts, plotPadX: padX, innerWidth: span } = scrubContextRef.current;
+    if (!Number.isFinite(locationX) || !Number.isFinite(span) || span <= 0) return;
     if (pts.length === 0) return;
     if (pts.length === 1) {
       setSelectedKey(pts[0].key);
       return;
     }
-    const clamped = Math.max(0, Math.min(span, locationX - padX));
-    const idx = Math.round((clamped / span) * (pts.length - 1));
+    const clamped = Math.max(0, Math.min(span - 0.0001, locationX - padX));
+    const idx = Math.max(
+      0,
+      Math.min(pts.length - 1, Math.floor((clamped / span) * pts.length)),
+    );
+    if (!Number.isFinite(idx)) return;
     const target = pts[idx];
     if (target) {
       setSelectedKey(target.key);
     }
+  };
+
+  const resolveEventLocationX = (evt: GestureResponderEvent): number => {
+    const native = evt.nativeEvent as unknown as { locationX?: number; offsetX?: number };
+    if (Number.isFinite(native.locationX)) return native.locationX as number;
+    if (Number.isFinite(native.offsetX)) return native.offsetX as number;
+    return Number.NaN;
   };
 
   const panResponder = useRef(
@@ -212,10 +243,10 @@ export function TrendBarChart({
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (evt: GestureResponderEvent) => {
         scrubContextRef.current.onScrubbingChange?.(true);
-        selectAtLocationX(evt.nativeEvent.locationX);
+        selectAtLocationX(resolveEventLocationX(evt));
       },
       onPanResponderMove: (evt: GestureResponderEvent) => {
-        selectAtLocationX(evt.nativeEvent.locationX);
+        selectAtLocationX(resolveEventLocationX(evt));
       },
       onPanResponderRelease: () => {
         scrubContextRef.current.onScrubbingChange?.(false);
@@ -231,9 +262,14 @@ export function TrendBarChart({
       ? plotPoints[activeIndex]
       : null;
 
-  const titleText = `收支趨勢（${
+  const activeBucketWidth = Math.max(
+    barWidth * 2 + barGap + 6,
+    Math.min(slotWidth * 0.92, 42),
+  );
+
+  const titleText = `收支趨勢 · ${
     isSingleDay ? '當日' : granularity === 'day' ? '按日' : '按月'
-  }）`;
+  }`;
 
   return (
     <View
@@ -241,7 +277,12 @@ export function TrendBarChart({
         styles.card,
         {
           backgroundColor: colors.card,
-          borderColor: colors.cardBorder,
+          borderColor: isDark ? 'rgba(139, 92, 246, 0.50)' : colors.accent,
+          shadowColor: colors.accent,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: isDark ? 0.28 : 0.1,
+          shadowRadius: 16,
+          elevation: 4,
         },
       ]}
       onLayout={(e) => {
@@ -249,6 +290,22 @@ export function TrendBarChart({
         if (w > 120) setContainerWidth(w);
       }}
     >
+      {/* Clipped Nebula Violet Background Radial Glow & Top 2px Violet Accent Strip */}
+      <View style={[StyleSheet.absoluteFill, styles.cardBgClip]} pointerEvents="none">
+        <Svg width="100%" height="100%" preserveAspectRatio="none">
+          <Defs>
+            <RadialGradient id="trendVioletGlow" cx="50%" cy="50%" r="50%">
+              <Stop offset="0%" stopColor="#8B5CF6" stopOpacity={0.15} />
+              <Stop offset="100%" stopColor="#8B5CF6" stopOpacity={0} />
+            </RadialGradient>
+          </Defs>
+          <Circle cx="90%" cy="16%" r="120" fill="url(#trendVioletGlow)" />
+        </Svg>
+        <View style={[styles.topAccentStrip, { backgroundColor: colors.accent }]} />
+      </View>
+
+      <HudReticle variant="accent" />
+
       {/* Header */}
       <View style={styles.headerRow}>
         <Text style={[styles.title, { color: colors.text }]}>{titleText}</Text>
@@ -260,16 +317,44 @@ export function TrendBarChart({
             style={({ pressed }) => [
               styles.navBtn,
               {
-                backgroundColor: colors.chipBg,
+                backgroundColor: colors.surfaceElevated,
+                borderColor: colors.cardBorder,
                 opacity: pressed ? 0.7 : 1,
               },
             ]}
-            accessibilityLabel="切換至支出分類結構"
+            accessibilityLabel="切換至結構分析"
           >
-            <ChevronLeft size={18} color={colors.textSecondary} />
+            <ChevronLeft size={16} color={colors.primary} />
           </Pressable>
         ) : null}
       </View>
+
+      {filterLabel ? (
+        <View style={styles.filterBannerRow}>
+          <SpringPressable
+            onPress={onClearFilter}
+            pressedScale={0.95}
+            haptic="selection"
+            accessibilityRole="button"
+            accessibilityLabel={`清除篩選 ${filterLabel}`}
+            style={[
+              styles.filterChip,
+              {
+                backgroundColor: colors.primaryBg,
+                borderColor: colors.primary,
+              },
+            ]}
+          >
+            <Text
+              numberOfLines={1}
+              style={[styles.filterChipText, { color: colors.primary }]}
+            >
+              篩選 · {filterLabel}
+            </Text>
+            <X size={13} color={colors.primary} strokeWidth={2.4} />
+          </SpringPressable>
+        </View>
+      ) : null}
 
       {/* Legend + Active Point Badge */}
       <View style={styles.legendBar}>
@@ -288,9 +373,19 @@ export function TrendBarChart({
           </View>
         </View>
         {activePoint ? (
-          <Text style={[styles.activePeriodBadge, { color: colors.primary }]}>
-            {activePoint.key}
-          </Text>
+          <View
+            style={[
+              styles.activePeriodPill,
+              {
+                backgroundColor: colors.primaryBg,
+                borderColor: colors.primary,
+              },
+            ]}
+          >
+            <Text style={[styles.activePeriodBadge, { color: colors.primary }]}>
+              {activePoint.key}
+            </Text>
+          </View>
         ) : null}
       </View>
 
@@ -299,7 +394,7 @@ export function TrendBarChart({
         <View
           style={[
             styles.inspectorStrip,
-            { backgroundColor: colors.surfaceElevated, borderColor: colors.border },
+            { backgroundColor: colors.surfaceElevated, borderColor: colors.cardBorder },
           ]}
         >
           <View style={styles.inspectorCol}>
@@ -311,7 +406,7 @@ export function TrendBarChart({
             </Text>
           </View>
           <View
-            style={[styles.inspectorDivider, { backgroundColor: colors.border }]}
+            style={[styles.inspectorDivider, { backgroundColor: colors.cardBorder }]}
           />
           <View style={styles.inspectorCol}>
             <Text style={[styles.inspectorLabel, { color: colors.textMuted }]}>
@@ -322,7 +417,7 @@ export function TrendBarChart({
             </Text>
           </View>
           <View
-            style={[styles.inspectorDivider, { backgroundColor: colors.border }]}
+            style={[styles.inspectorDivider, { backgroundColor: colors.cardBorder }]}
           />
           <View style={styles.inspectorCol}>
             <Text style={[styles.inspectorLabel, { color: colors.textMuted }]}>
@@ -344,7 +439,7 @@ export function TrendBarChart({
       {data.length === 0 ? (
         <View style={styles.emptyBox}>
           <Text style={[styles.emptyText, { color: colors.textMuted }]}>
-            此區間尚無可繪製的收支趨勢資料
+            此區間尚無可繪製的收支趨勢紀錄
           </Text>
         </View>
       ) : (
@@ -358,6 +453,7 @@ export function TrendBarChart({
                 y={tick.y + 4}
                 fontSize={10}
                 fontWeight="600"
+                fontFamily={MONO_FONT}
                 fill={colors.textMuted}
                 textAnchor="end"
               >
@@ -374,17 +470,17 @@ export function TrendBarChart({
           >
             <Svg width={plotWidth} height={chartHeight}>
               <Defs>
-                <LinearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                  <Stop offset="0" stopColor={colors.income} stopOpacity={0.28} />
-                  <Stop offset="1" stopColor={colors.income} stopOpacity={0.02} />
+                <LinearGradient id="incomeBarGrad" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0" stopColor={colors.income} stopOpacity={1} />
+                  <Stop offset="1" stopColor={colors.income} stopOpacity={0.55} />
                 </LinearGradient>
-                <LinearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
-                  <Stop offset="0" stopColor={colors.expense} stopOpacity={0.28} />
-                  <Stop offset="1" stopColor={colors.expense} stopOpacity={0.02} />
+                <LinearGradient id="expenseBarGrad" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0" stopColor={colors.expense} stopOpacity={1} />
+                  <Stop offset="1" stopColor={colors.expense} stopOpacity={0.55} />
                 </LinearGradient>
               </Defs>
 
-              {/* Grid lines */}
+              {/* Tactical Grid Lines */}
               {yTicks.map((tick) => (
                 <Line
                   key={tick.ratio}
@@ -392,67 +488,85 @@ export function TrendBarChart({
                   y1={tick.y}
                   x2={plotWidth}
                   y2={tick.y}
-                  stroke={colors.divider}
+                  stroke={
+                    tick.ratio === 0
+                      ? colors.cardBorder
+                      : isDark
+                        ? colors.gridLine
+                        : colors.divider
+                  }
                   strokeWidth={1}
-                  strokeDasharray={tick.ratio === 0 ? undefined : '4,4'}
+                  strokeDasharray={tick.ratio === 0 ? undefined : '3,3'}
                 />
               ))}
 
-              {/* Area Fills & Line Strokes (multi-point) */}
-              {plotPoints.length >= 2 ? (
+              {/* Active Bucket Highlight Column */}
+              {activePlotPoint ? (
                 <>
-                  <Path d={incomeAreaPath} fill="url(#incomeGrad)" />
-                  <Path d={expenseAreaPath} fill="url(#expenseGrad)" />
-                  <Path
-                    d={incomeLinePath}
-                    fill="none"
-                    stroke={colors.income}
-                    strokeWidth={2.2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                  <Rect
+                    x={Math.max(0, activePlotPoint.x - activeBucketWidth / 2)}
+                    y={paddingTop}
+                    width={Math.min(activeBucketWidth, plotWidth)}
+                    height={plotHeight}
+                    rx={3}
+                    ry={3}
+                    fill={colors.primaryBg}
+                    stroke={colors.primary}
+                    strokeWidth={1}
+                    strokeOpacity={0.45}
                   />
-                  <Path
-                    d={expenseLinePath}
-                    fill="none"
-                    stroke={colors.expense}
-                    strokeWidth={2.2}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
+                  <Rect
+                    x={Math.max(0, activePlotPoint.x - activeBucketWidth / 2)}
+                    y={paddingTop}
+                    width={Math.min(activeBucketWidth, plotWidth)}
+                    height={2.5}
+                    rx={1}
+                    ry={1}
+                    fill={colors.primary}
                   />
                 </>
               ) : null}
 
-              {/* Vertical Crosshair & Highlighted Dots */}
-              {activePlotPoint ? (
-                <>
-                  <Line
-                    x1={activePlotPoint.x}
-                    y1={paddingTop}
-                    x2={activePlotPoint.x}
-                    y2={baseLineY}
-                    stroke={colors.primary}
-                    strokeWidth={1.2}
-                    strokeDasharray="4,4"
-                    opacity={0.75}
-                  />
-                  <Circle
-                    cx={activePlotPoint.x}
-                    cy={activePlotPoint.incomeY}
-                    r={5}
-                    fill={colors.income}
-                    stroke={colors.card}
-                    strokeWidth={2}
-                  />
-                  <Circle
-                    cx={activePlotPoint.x}
-                    cy={activePlotPoint.expenseY}
-                    r={5}
-                    fill={colors.expense}
-                    stroke={colors.card}
-                    strokeWidth={2}
-                  />
-                </>
-              ) : null}
+              {/* Tactical Dual Bars (Income & Expense) */}
+              {plotPoints.map((p) => {
+                const isSelected = activePlotPoint?.index === p.index;
+                const barOpacity = isSelected ? 1 : 0.72;
+                const incomeX = p.x - barGap / 2 - barWidth;
+                const expenseX = p.x + barGap / 2;
+                const scaledIncomeHeight = p.incomeHeight * animProgress;
+                const scaledIncomeY = baseLineY - scaledIncomeHeight;
+                const scaledExpenseHeight = p.expenseHeight * animProgress;
+                const scaledExpenseY = baseLineY - scaledExpenseHeight;
+
+                return (
+                  <React.Fragment key={p.point.key}>
+                    {scaledIncomeHeight > 0 ? (
+                      <Rect
+                        x={incomeX}
+                        y={scaledIncomeY}
+                        width={barWidth}
+                        height={scaledIncomeHeight}
+                        rx={2}
+                        ry={2}
+                        fill="url(#incomeBarGrad)"
+                        opacity={barOpacity}
+                      />
+                    ) : null}
+                    {scaledExpenseHeight > 0 ? (
+                      <Rect
+                        x={expenseX}
+                        y={scaledExpenseY}
+                        width={barWidth}
+                        height={scaledExpenseHeight}
+                        rx={2}
+                        ry={2}
+                        fill="url(#expenseBarGrad)"
+                        opacity={barOpacity}
+                      />
+                    ) : null}
+                  </React.Fragment>
+                );
+              })}
 
               {/* Sparse X-axis labels */}
               {plotPoints.map((p) => {
@@ -475,6 +589,7 @@ export function TrendBarChart({
                     y={chartHeight - 10}
                     fontSize={10}
                     fontWeight={isSelected ? '700' : '500'}
+                    fontFamily={MONO_FONT}
                     fill={isSelected ? colors.primary : colors.textMuted}
                     textAnchor={anchor}
                   >
@@ -492,9 +607,21 @@ export function TrendBarChart({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
+    position: 'relative',
+    borderRadius: HUD_RADIUS_LG,
     borderWidth: 1,
     padding: 16,
+  },
+  cardBgClip: {
+    borderRadius: HUD_RADIUS_LG,
+    overflow: 'hidden',
+  },
+  topAccentStrip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
   },
   headerRow: {
     flexDirection: 'row',
@@ -503,15 +630,39 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   title: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontFamily: MONO_FONT,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   navBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
+    width: 30,
+    height: 30,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  filterBannerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+    maxWidth: '100%',
+  },
+  filterChipText: {
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    fontWeight: '700',
+    flexShrink: 1,
   },
   legendBar: {
     flexDirection: 'row',
@@ -532,21 +683,29 @@ const styles = StyleSheet.create({
   legendDot: {
     width: 8,
     height: 8,
-    borderRadius: 4,
+    borderRadius: 2,
   },
   legendLabel: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  activePeriodPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
   },
   activePeriodBadge: {
-    fontSize: 12,
+    fontFamily: MONO_FONT,
+    fontSize: 11,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   inspectorStrip: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     paddingVertical: 8,
     paddingHorizontal: 10,
@@ -561,13 +720,15 @@ const styles = StyleSheet.create({
     height: 24,
   },
   inspectorLabel: {
-    fontSize: 11,
-    fontWeight: '600',
+    fontFamily: MONO_FONT,
+    fontSize: 10,
+    fontWeight: '700',
     marginBottom: 2,
   },
   inspectorVal: {
+    fontFamily: MONO_FONT,
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
   chartBody: {
@@ -580,7 +741,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   emptyText: {
-    fontSize: 13,
-    fontWeight: '500',
+    fontFamily: MONO_FONT,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

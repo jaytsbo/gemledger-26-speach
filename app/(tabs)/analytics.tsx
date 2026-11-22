@@ -1,5 +1,8 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
+  Animated,
+  Easing,
   Modal,
   Platform,
   Pressable,
@@ -11,44 +14,70 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, {
+  Circle,
+  Defs,
+  LinearGradient,
+  RadialGradient,
+  Rect,
+  Stop,
+} from 'react-native-svg';
 import {
   ArrowDownRight,
-  ArrowLeftRight,
   ArrowUpRight,
   Calendar,
   Check,
   ChevronRight,
-  Gamepad2,
-  GraduationCap,
-  HandCoins,
-  HeartPulse,
-  Home,
-  Landmark,
-  type LucideIcon,
-  RotateCcw,
-  Shirt,
-  Tag,
-  TrainFront,
   TrendingDown,
   TrendingUp,
-  Utensils,
   Wallet,
   X,
 } from 'lucide-react-native';
 import { DonutChart } from '../../src/components/DonutChart';
+import { LedgerIcon } from '../../src/components/LedgerIcon';
 import { TrendBarChart } from '../../src/components/TrendBarChart';
+import { CyberNeuralBackground } from '../../src/components/ui/CyberNeuralBackground';
+import { HudReticle, MONO_FONT } from '../../src/components/ui/HudReticle';
+import { SpringPressable } from '../../src/components/ui/SpringPressable';
+import { SpringSegmentedControl } from '../../src/components/ui/SpringSegmentedControl';
 import { useLedgerStore } from '../../src/store/useLedgerStore';
-import { getCategoryMeta } from '../../src/theme/colors';
+import {
+  HUD_RADIUS,
+  HUD_RADIUS_LG,
+  getAccountMeta,
+  getCategoryMeta,
+} from '../../src/theme/colors';
 import { useAppTheme } from '../../src/theme/ThemeContext';
 import {
-  computeCategoryStats,
+  BreakdownDimension,
+  FlowType,
+  computeFlowBreakdown,
   computeKPIStats,
   computeTrendStats,
+  extractAvailableTimeBuckets,
   filterTransactions,
 } from '../../src/utils/analytics';
 import { formatMoney } from '../../src/utils/currency';
+import { getLocalDateOffset } from '../../src/utils/dateTime';
 
 type TimeMode = 'all' | 'year' | 'month' | 'day';
+
+type SelectedBreakdown = {
+  flow: FlowType;
+  dimension: BreakdownDimension;
+  key: string;
+} | null;
+
+const BREAKDOWN_TITLES: Record<FlowType, Record<BreakdownDimension, string>> = {
+  expense: {
+    category: '支出結構 · 分類',
+    account: '支出結構 · 帳戶',
+  },
+  income: {
+    category: '收入結構 · 分類',
+    account: '收入結構 · 帳戶',
+  },
+};
 
 const TIME_TABS: { key: TimeMode; label: string }[] = [
   { key: 'all', label: '全部' },
@@ -57,88 +86,67 @@ const TIME_TABS: { key: TimeMode; label: string }[] = [
   { key: 'day', label: '日' },
 ];
 
-function getLocalDateOffset(offsetDays: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-const CATEGORY_ICON_MAP: Record<string, LucideIcon> = {
-  Utensils,
-  Shirt,
-  Home,
-  TrainFront,
-  Gamepad2,
-  GraduationCap,
-  HeartPulse,
-  Wallet,
-  TrendingUp,
-  Landmark,
-  HandCoins,
-  RotateCcw,
-  ArrowLeftRight,
-  Tag,
-};
-
-function renderCategoryIcon(iconName: string, color: string, size = 18) {
-  const IconComp = CATEGORY_ICON_MAP[iconName] || Tag;
-  return <IconComp size={size} color={color} />;
-}
-
 export default function AnalyticsScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useAppTheme();
+  const { colors, isDark } = useAppTheme();
   const { width: windowWidth } = useWindowDimensions();
   const containerWidth = Math.max(windowWidth - 32, 280);
 
   const transactions = useLedgerStore((s) => s.transactions);
+  const settings = useLedgerStore((s) => s.settings);
   const exchangeRates = useLedgerStore((s) => s.exchangeRates);
   const baseCurrency = useLedgerStore((s) => s.baseCurrency);
 
-  const now = useMemo(() => new Date(), []);
-  const currentYear = String(now.getFullYear());
-  const currentMonth = String(now.getMonth() + 1).padStart(2, '0');
-  const currentYearMonth = `${currentYear}-${currentMonth}`;
-  const todayStr = useMemo(() => getLocalDateOffset(0), []);
-  const yesterdayStr = useMemo(() => getLocalDateOffset(-1), []);
+  const [todayStr, setTodayStr] = useState(() => getLocalDateOffset(0));
+  const [yesterdayStr, setYesterdayStr] = useState(() => getLocalDateOffset(-1));
+
+  useFocusEffect(
+    useCallback(() => {
+      const nextToday = getLocalDateOffset(0);
+      const nextYesterday = getLocalDateOffset(-1);
+      setTodayStr((prev) => (prev !== nextToday ? nextToday : prev));
+      setYesterdayStr((prev) => (prev !== nextYesterday ? nextYesterday : prev));
+    }, []),
+  );
+
+  const currentYear = todayStr.slice(0, 4);
+  const currentMonth = todayStr.slice(5, 7);
+  const currentYearMonth = todayStr.slice(0, 7);
 
   const [timeMode, setTimeMode] = useState<TimeMode>('month');
-  const [selectedTimeValue, setSelectedTimeValue] = useState<string>(currentYearMonth);
+  const [selectedTimeValue, setSelectedTimeValue] = useState<string>(() => getLocalDateOffset(0).slice(0, 7));
   const [timeModalOpen, setTimeModalOpen] = useState(false);
   const [pickerTimeTab, setPickerTimeTab] = useState<TimeMode>('month');
 
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [flow, setFlow] = useState<FlowType>('expense');
+  const [dimension, setDimension] = useState<BreakdownDimension>('category');
+  const [selectedSlice, setSelectedSlice] = useState<SelectedBreakdown>(null);
   const [activeSlide, setActiveSlide] = useState(0);
   const [isScrubbingChart, setIsScrubbingChart] = useState(false);
   const carouselRef = useRef<ScrollView>(null);
+  const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const availableYears = useMemo(() => {
-    const yearSet = new Set<string>([currentYear]);
-    for (const tx of transactions) {
-      const y = (tx.date || '').slice(0, 4);
-      if (/^\d{4}$/.test(y)) yearSet.add(y);
-    }
-    return Array.from(yearSet).sort((a, b) => b.localeCompare(a));
-  }, [transactions, currentYear]);
+  useEffect(() => {
+    return () => {
+      if (scrollSettleTimerRef.current) {
+        clearTimeout(scrollSettleTimerRef.current);
+      }
+    };
+  }, []);
 
-  const availableMonths = useMemo(() => {
-    const monthSet = new Set<string>([currentYearMonth]);
-    for (const tx of transactions) {
-      const ym = (tx.date || '').slice(0, 7);
-      if (/^\d{4}-\d{2}$/.test(ym)) monthSet.add(ym);
-    }
-    return Array.from(monthSet).sort((a, b) => b.localeCompare(a));
-  }, [transactions, currentYearMonth]);
-
-  const availableDays = useMemo(() => {
-    const daySet = new Set<string>([todayStr]);
-    for (const tx of transactions) {
-      const d = (tx.date || '').slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) daySet.add(d);
-    }
-    return Array.from(daySet).sort((a, b) => b.localeCompare(a));
-  }, [transactions, todayStr]);
+  const {
+    years: availableYears,
+    months: availableMonths,
+    days: availableDays,
+  } = useMemo(
+    () =>
+      extractAvailableTimeBuckets(transactions, {
+        year: currentYear,
+        month: currentYearMonth,
+        day: todayStr,
+      }),
+    [transactions, currentYear, currentYearMonth, todayStr],
+  );
 
   const trendGranularity: 'day' | 'month' =
     timeMode === 'month' || timeMode === 'day' ? 'day' : 'month';
@@ -192,17 +200,151 @@ export default function AnalyticsScreen() {
     [scopedTransactions, baseCurrency, exchangeRates, transactions],
   );
 
-  const categoryStats = useMemo(
-    () => computeCategoryStats(scopedTransactions, baseCurrency, exchangeRates),
-    [scopedTransactions, baseCurrency, exchangeRates],
+  const breakdownStats = useMemo(
+    () =>
+      computeFlowBreakdown(
+        scopedTransactions,
+        flow,
+        dimension,
+        baseCurrency,
+        exchangeRates,
+      ),
+    [scopedTransactions, flow, dimension, baseCurrency, exchangeRates],
   );
 
+  const orbOpacityAnim = useRef(new Animated.Value(0.35)).current;
+  const rankingBarAnim = useRef(new Animated.Value(0)).current;
+  const prevKpiRef = useRef({
+    netCashflow: 0,
+    realIncome: 0,
+    realExpense: 0,
+  });
+  const [displayKpi, setDisplayKpi] = useState(() => ({
+    netCashflow: kpi.netCashflow,
+    realIncome: kpi.realIncome,
+    realExpense: kpi.realExpense,
+  }));
+
+  useEffect(() => {
+    const useNative = Platform.OS !== 'web';
+    orbOpacityAnim.setValue(0.35);
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(orbOpacityAnim, {
+          toValue: 0.85,
+          duration: 2400,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+        Animated.timing(orbOpacityAnim, {
+          toValue: 0.35,
+          duration: 2400,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: useNative,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+    };
+  }, [orbOpacityAnim]);
+
+  useEffect(() => {
+    let rafId: number | null = null;
+    const duration = 480;
+    const startTime = Date.now();
+    const fromNet = prevKpiRef.current.netCashflow;
+    const fromInc = prevKpiRef.current.realIncome;
+    const fromExp = prevKpiRef.current.realExpense;
+    const toNet = kpi.netCashflow;
+    const toInc = kpi.realIncome;
+    const toExp = kpi.realExpense;
+
+    const tick = () => {
+      const elapsed = Date.now() - startTime;
+      const t = Math.min(1, elapsed / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const curNet = fromNet + (toNet - fromNet) * eased;
+      const curInc = fromInc + (toInc - fromInc) * eased;
+      const curExp = fromExp + (toExp - fromExp) * eased;
+      prevKpiRef.current = {
+        netCashflow: curNet,
+        realIncome: curInc,
+        realExpense: curExp,
+      };
+      setDisplayKpi({
+        netCashflow: curNet,
+        realIncome: curInc,
+        realExpense: curExp,
+      });
+      if (t < 1) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        prevKpiRef.current = {
+          netCashflow: toNet,
+          realIncome: toInc,
+          realExpense: toExp,
+        };
+      }
+    };
+
+    rafId = requestAnimationFrame(tick);
+
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [kpi.netCashflow, kpi.realIncome, kpi.realExpense]);
+
+  useEffect(() => {
+    rankingBarAnim.setValue(0);
+    const barTiming = Animated.timing(rankingBarAnim, {
+      toValue: 1,
+      duration: 450,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    });
+    barTiming.start();
+    return () => {
+      barTiming.stop();
+    };
+  }, [breakdownStats, flow, dimension, rankingBarAnim]);
+
+  useEffect(() => {
+    if (!selectedSlice) return;
+    if (
+      selectedSlice.flow !== flow ||
+      selectedSlice.dimension !== dimension ||
+      !breakdownStats.some((item) => item.key === selectedSlice.key)
+    ) {
+      console.log(
+        `[AnalyticsScreen/sliceSync] Reset - Stale selection cleared:${selectedSlice.flow}/${selectedSlice.dimension}/${selectedSlice.key}`,
+      );
+      setSelectedSlice(null);
+    }
+  }, [breakdownStats, selectedSlice, flow, dimension]);
+
+  const activeSelectedKey =
+    selectedSlice &&
+    selectedSlice.flow === flow &&
+    selectedSlice.dimension === dimension
+      ? selectedSlice.key
+      : null;
+
   const trendStats = useMemo(() => {
-    const filtered = selectedCategory
-      ? scopedTransactions.filter((tx) => (tx.category || '').trim() === selectedCategory)
+    const filtered = selectedSlice
+      ? scopedTransactions.filter((tx) => {
+          const txKey =
+            selectedSlice.dimension === 'category'
+              ? (tx.category || '').trim() || '未分類'
+              : (tx.account || '').trim() || '現金';
+          return txKey === selectedSlice.key;
+        })
       : scopedTransactions;
     console.log(
-      `[AnalyticsScreen/trendStats] Compute - Category:${selectedCategory ?? 'ALL'}, Count:${filtered.length}`,
+      `[AnalyticsScreen/trendStats] Compute - Filter:${selectedSlice ? `${selectedSlice.dimension}:${selectedSlice.key}` : 'ALL'}, Count:${filtered.length}`,
     );
     return computeTrendStats(
       filtered,
@@ -210,15 +352,31 @@ export default function AnalyticsScreen() {
       exchangeRates,
       trendGranularity,
     );
-  }, [scopedTransactions, selectedCategory, baseCurrency, exchangeRates, trendGranularity]);
+  }, [scopedTransactions, selectedSlice, baseCurrency, exchangeRates, trendGranularity]);
+
+  const flowOptions = useMemo(
+    () => [
+      { value: 'expense' as FlowType, label: '支出 (−)', activeColor: colors.expense },
+      { value: 'income' as FlowType, label: '收入 (+)', activeColor: colors.income },
+    ],
+    [colors.expense, colors.income],
+  );
+
+  const dimensionOptions = useMemo(
+    () => [
+      { value: 'category' as BreakdownDimension, label: '按分類', activeColor: colors.primary },
+      { value: 'account' as BreakdownDimension, label: '按帳戶', activeColor: colors.primary },
+    ],
+    [colors.primary],
+  );
 
   const timePillLabel = useMemo(() => {
-    if (timeMode === 'all') return '全部';
-    if (timeMode === 'year') return `年: ${selectedTimeValue}`;
-    if (timeMode === 'month') return `月: ${selectedTimeValue}`;
+    if (timeMode === 'all') return '全部期間';
+    if (timeMode === 'year') return `年 · ${selectedTimeValue}`;
+    if (timeMode === 'month') return `月 · ${selectedTimeValue}`;
     const shortDay =
       selectedTimeValue.length >= 10 ? selectedTimeValue.slice(5) : selectedTimeValue;
-    return `日: ${shortDay}`;
+    return `日 · ${shortDay}`;
   }, [timeMode, selectedTimeValue]);
 
   const pickerOptions = useMemo(() => {
@@ -275,14 +433,35 @@ export default function AnalyticsScreen() {
     console.log(`[AnalyticsScreen/selectTime] Update - Mode:${pickerTimeTab}, Value:${value}`);
     setTimeMode(pickerTimeTab);
     setSelectedTimeValue(value);
-    setSelectedCategory(null);
+    setSelectedSlice(null);
     setTimeModalOpen(false);
   };
 
-  const handleToggleCategory = (catName: string | null) => {
-    console.log(`[AnalyticsScreen/selectCategory] Toggle - Category:${catName ?? 'RESET'}`);
-    setSelectedCategory(catName);
-  };
+  const handleChangeFlow = useCallback((nextFlow: FlowType) => {
+    console.log(`[AnalyticsScreen/switchFlow] Update - Flow:${nextFlow}`);
+    setFlow(nextFlow);
+    setSelectedSlice(null);
+  }, []);
+
+  const handleChangeDimension = useCallback((nextDim: BreakdownDimension) => {
+    console.log(`[AnalyticsScreen/switchDimension] Update - Dimension:${nextDim}`);
+    setDimension(nextDim);
+    setSelectedSlice(null);
+  }, []);
+
+  const handleToggleSlice = useCallback(
+    (key: string | null) => {
+      console.log(
+        `[AnalyticsScreen/selectSlice] Toggle - Flow:${flow}, Dim:${dimension}, Key:${key ?? 'RESET'}`,
+      );
+      if (!key) {
+        setSelectedSlice(null);
+        return;
+      }
+      setSelectedSlice({ flow, dimension, key });
+    },
+    [flow, dimension],
+  );
 
   const handleJumpToSlide = (slideIndex: number) => {
     console.log(`[AnalyticsScreen/carousel] Jump - Slide:${slideIndex}`);
@@ -292,7 +471,9 @@ export default function AnalyticsScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.background }]}>
+      <CyberNeuralBackground />
       <ScrollView
+        style={styles.transparentBg}
         contentContainerStyle={[
           styles.scrollContent,
           {
@@ -304,7 +485,23 @@ export default function AnalyticsScreen() {
       >
         {/* Top Header */}
         <View style={styles.headerRow}>
-          <Text style={[styles.pageTitle, { color: colors.text }]}>統計分析</Text>
+          <View style={styles.headerTitleWrap}>
+            <View
+              style={[
+                styles.titleAccent,
+                {
+                  backgroundColor: colors.primary,
+                  shadowColor: colors.primary,
+                  shadowOffset: { width: 0, height: 0 },
+                  shadowOpacity: isDark ? 0.65 : 0.3,
+                  shadowRadius: 8,
+                },
+              ]}
+            />
+            <Text style={[styles.pageTitle, { color: colors.text }]}>
+              統計分析
+            </Text>
+          </View>
 
           <Pressable
             onPress={handleOpenTimeModal}
@@ -312,9 +509,9 @@ export default function AnalyticsScreen() {
               styles.timeFilterPill,
               {
                 backgroundColor:
-                  timeMode !== 'all' ? colors.primaryLight : colors.surface,
+                  timeMode !== 'all' ? colors.primaryBg : colors.surfaceElevated,
                 borderColor:
-                  timeMode !== 'all' ? colors.primary : colors.border,
+                  timeMode !== 'all' ? colors.primary : colors.cardBorder,
               },
             ]}
           >
@@ -335,18 +532,57 @@ export default function AnalyticsScreen() {
           </Pressable>
         </View>
 
-        {/* Net Cashflow + Income/Expense Summary Card */}
+        {/* Net Cashflow + Income/Expense Summary Card (Upper Electric Cyan Core) */}
         <View
           style={[
             styles.card,
-            { backgroundColor: colors.card, borderColor: colors.cardBorder },
+            {
+              backgroundColor: colors.card,
+              borderColor: isDark ? 'rgba(0, 240, 255, 0.48)' : colors.primary,
+              shadowColor: colors.primary,
+              shadowOffset: { width: 0, height: 0 },
+              shadowOpacity: isDark ? 0.28 : 0.1,
+              shadowRadius: 16,
+              elevation: 5,
+            },
           ]}
         >
+          {/* Clipped Diagonal Cyan-to-Violet Wash + Breathing Radial Cyan Orb + 2px Top Cyan Accent Strip */}
+          <View style={[StyleSheet.absoluteFill, styles.cardBgClip]} pointerEvents="none">
+            <Svg width="100%" height="100%" preserveAspectRatio="none">
+              <Defs>
+                <LinearGradient id="analyticsCyanVioletWash" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <Stop offset="0%" stopColor={colors.primary} stopOpacity={isDark ? 0.14 : 0.08} />
+                  <Stop offset="58%" stopColor={colors.accent} stopOpacity={isDark ? 0.08 : 0.04} />
+                  <Stop offset="100%" stopColor={colors.accent} stopOpacity={0} />
+                </LinearGradient>
+              </Defs>
+              <Rect x="0" y="0" width="100%" height="100%" fill="url(#analyticsCyanVioletWash)" />
+            </Svg>
+            <Animated.View
+              pointerEvents="none"
+              style={[StyleSheet.absoluteFill, { opacity: orbOpacityAnim }]}
+            >
+              <Svg width="100%" height="100%" preserveAspectRatio="none">
+                <Defs>
+                  <RadialGradient id="analyticsCyanOrb" cx="50%" cy="50%" r="50%">
+                    <Stop offset="0%" stopColor={colors.primary} stopOpacity={isDark ? 0.24 : 0.14} />
+                    <Stop offset="100%" stopColor={colors.primary} stopOpacity={0} />
+                  </RadialGradient>
+                </Defs>
+                <Circle cx="88%" cy="22%" r="105" fill="url(#analyticsCyanOrb)" />
+              </Svg>
+            </Animated.View>
+            <View style={[styles.topAccentStrip, { backgroundColor: colors.primary }]} />
+          </View>
+
+          <HudReticle variant="primary" />
+
           <View style={styles.cashflowHeader}>
-            <View style={styles.cashflowValueGroup}>
+            <View style={styles.cashflowValueBlock}>
               <Wallet
                 size={18}
-                color={colors.textMuted}
+                color={colors.primary}
                 accessibilityLabel="期間淨現金流"
               />
               <Text
@@ -358,7 +594,7 @@ export default function AnalyticsScreen() {
                 ]}
               >
                 {kpi.netCashflow >= 0 ? '+' : ''}
-                {formatMoney(kpi.netCashflow, baseCurrency)}
+                {formatMoney(displayKpi.netCashflow, baseCurrency)}
               </Text>
             </View>
             <View
@@ -367,13 +603,17 @@ export default function AnalyticsScreen() {
                 {
                   backgroundColor:
                     kpi.netCashflow >= 0 ? colors.incomeBg : colors.expenseBg,
+                  borderColor:
+                    kpi.netCashflow >= 0
+                      ? `${colors.income}55`
+                      : `${colors.expense}55`,
                 },
               ]}
             >
               {kpi.netCashflow >= 0 ? (
-                <TrendingUp size={20} color={colors.income} />
+                <TrendingUp size={18} color={colors.income} />
               ) : (
-                <TrendingDown size={20} color={colors.expense} />
+                <TrendingDown size={18} color={colors.expense} />
               )}
             </View>
           </View>
@@ -382,7 +622,10 @@ export default function AnalyticsScreen() {
             <View
               style={[
                 styles.kpiPill,
-                { backgroundColor: colors.incomeBg },
+                {
+                  backgroundColor: colors.incomeBg,
+                  borderColor: `${colors.income}45`,
+                },
               ]}
             >
               <ArrowUpRight
@@ -391,13 +634,16 @@ export default function AnalyticsScreen() {
                 accessibilityLabel="實質總收入"
               />
               <Text style={[styles.kpiPillValue, { color: colors.income }]}>
-                +{formatMoney(kpi.realIncome, baseCurrency)}
+                +{formatMoney(displayKpi.realIncome, baseCurrency)}
               </Text>
             </View>
             <View
               style={[
                 styles.kpiPill,
-                { backgroundColor: colors.expenseBg },
+                {
+                  backgroundColor: colors.expenseBg,
+                  borderColor: `${colors.expense}45`,
+                },
               ]}
             >
               <ArrowDownRight
@@ -406,7 +652,7 @@ export default function AnalyticsScreen() {
                 accessibilityLabel="實質總支出"
               />
               <Text style={[styles.kpiPillValue, { color: colors.expense }]}>
-                -{formatMoney(kpi.realExpense, baseCurrency)}
+                -{formatMoney(displayKpi.realExpense, baseCurrency)}
               </Text>
             </View>
           </View>
@@ -420,36 +666,90 @@ export default function AnalyticsScreen() {
             pagingEnabled
             scrollEnabled={!isScrubbingChart}
             showsHorizontalScrollIndicator={false}
+            scrollEventThrottle={32}
+            onScroll={(e) => {
+              const offsetX = e.nativeEvent.contentOffset.x;
+              if (scrollSettleTimerRef.current) clearTimeout(scrollSettleTimerRef.current);
+              scrollSettleTimerRef.current = setTimeout(() => {
+                if (containerWidth <= 0) return;
+                const page = Math.max(0, Math.min(1, Math.round(offsetX / containerWidth)));
+                setActiveSlide((prev) => {
+                  if (prev !== page) {
+                    console.log(`[AnalyticsScreen/carousel] ScrollSync - Slide:${page}`);
+                  }
+                  return page;
+                });
+              }, 90);
+            }}
             onMomentumScrollEnd={(e) => {
-              const page = Math.round(e.nativeEvent.contentOffset.x / containerWidth);
+              if (scrollSettleTimerRef.current) {
+                clearTimeout(scrollSettleTimerRef.current);
+                scrollSettleTimerRef.current = null;
+              }
+              const page = Math.max(
+                0,
+                Math.min(1, Math.round(e.nativeEvent.contentOffset.x / containerWidth)),
+              );
               if (page !== activeSlide) {
                 console.log(`[AnalyticsScreen/carousel] Swipe - Slide:${page}`);
                 setActiveSlide(page);
               }
             }}
           >
-            {/* Slide 0: Donut Chart + Category Ranking Card */}
+            {/* Slide 0: Donut Chart + Breakdown Ranking Card (Lower Nebula Violet Core) */}
             <View style={{ width: containerWidth }}>
               <View
                 style={[
                   styles.card,
-                  { backgroundColor: colors.card, borderColor: colors.cardBorder },
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: isDark ? 'rgba(139, 92, 246, 0.50)' : colors.accent,
+                    shadowColor: colors.accent,
+                    shadowOffset: { width: 0, height: 0 },
+                    shadowOpacity: isDark ? 0.28 : 0.1,
+                    shadowRadius: 16,
+                    elevation: 4,
+                  },
                 ]}
               >
+                {/* Clipped Nebula Violet Top-Right Radial Glow & 2px Top Violet Accent Strip */}
+                <View style={[StyleSheet.absoluteFill, styles.cardBgClip]} pointerEvents="none">
+                  <Svg width="100%" height="100%" preserveAspectRatio="none">
+                    <Defs>
+                      <RadialGradient id="analyticsBreakdownVioletGlow" cx="50%" cy="50%" r="50%">
+                        <Stop offset="0%" stopColor="#8B5CF6" stopOpacity={0.15} />
+                        <Stop offset="100%" stopColor="#8B5CF6" stopOpacity={0} />
+                      </RadialGradient>
+                    </Defs>
+                    <Circle cx="90%" cy="14%" r="125" fill="url(#analyticsBreakdownVioletGlow)" />
+                  </Svg>
+                  <View style={[styles.topAccentStrip, { backgroundColor: colors.accent }]} />
+                </View>
+
+                <HudReticle variant="accent" />
+
                 <View style={styles.sectionHeader}>
                   <Text style={[styles.cardTitle, { color: colors.text }]}>
-                    支出分類結構
+                    {BREAKDOWN_TITLES[flow][dimension]}
                   </Text>
                   <View style={styles.sectionHeaderRight}>
-                    {selectedCategory ? (
-                      <Pressable
-                        onPress={() => handleToggleCategory(null)}
-                        style={[styles.clearChip, { backgroundColor: colors.chipBg }]}
+                    {activeSelectedKey ? (
+                      <SpringPressable
+                        onPress={() => handleToggleSlice(null)}
+                        pressedScale={0.95}
+                        haptic="selection"
+                        style={[
+                          styles.clearChip,
+                          {
+                            backgroundColor: colors.primaryBg,
+                            borderColor: colors.primary,
+                          },
+                        ]}
                       >
                         <Text style={[styles.clearChipText, { color: colors.primary }]}>
                           重設焦點
                         </Text>
-                      </Pressable>
+                      </SpringPressable>
                     ) : null}
                     <Pressable
                       onPress={() => handleJumpToSlide(1)}
@@ -457,90 +757,172 @@ export default function AnalyticsScreen() {
                       accessibilityLabel="前往收支趨勢"
                       style={[
                         styles.carouselJumpBtn,
-                        { backgroundColor: colors.surfaceElevated, borderColor: colors.border },
+                        {
+                          backgroundColor: colors.surfaceElevated,
+                          borderColor: colors.cardBorder,
+                        },
                       ]}
                     >
-                      <ChevronRight size={16} color={colors.textSecondary} />
+                      <ChevronRight size={16} color={colors.primary} />
                     </Pressable>
                   </View>
                 </View>
 
-                <View style={styles.donutWrap}>
-                  <DonutChart
-                    data={categoryStats}
-                    totalAmount={kpi.realExpense}
-                    baseCurrency={baseCurrency}
-                    selectedCategory={selectedCategory}
-                    onSelectCategory={handleToggleCategory}
+                {/* Dual Segmented Controls: Expense/Income × Category/Account */}
+                <View
+                  style={[
+                    styles.dualControlsWrap,
+                    containerWidth >= 420 && styles.dualControlsRow,
+                  ]}
+                >
+                  <SpringSegmentedControl
+                    options={flowOptions}
+                    value={flow}
+                    onChange={handleChangeFlow}
+                    size="sm"
+                    accessibilityLabel="收支類型切換"
+                    style={containerWidth >= 420 ? styles.controlHalf : undefined}
+                  />
+                  <SpringSegmentedControl
+                    options={dimensionOptions}
+                    value={dimension}
+                    onChange={handleChangeDimension}
+                    size="sm"
+                    accessibilityLabel="統計維度切換"
+                    style={containerWidth >= 420 ? styles.controlHalf : undefined}
                   />
                 </View>
 
-                {/* Category Ranking List */}
-                {categoryStats.length === 0 ? (
+                <View style={styles.donutWrap}>
+                  <DonutChart
+                    data={breakdownStats}
+                    totalAmount={flow === 'expense' ? kpi.realExpense : kpi.realIncome}
+                    baseCurrency={baseCurrency}
+                    centerLabel={flow === 'expense' ? '總支出' : '總收入'}
+                    unitLabel={dimension === 'category' ? '項分類' : '個帳戶'}
+                    emptyLabel={flow === 'expense' ? '尚無支出' : '尚無收入'}
+                    selectedAmountColor={flow === 'expense' ? colors.expense : colors.income}
+                    selectedKey={activeSelectedKey}
+                    onSelectKey={handleToggleSlice}
+                  />
+                </View>
+
+                {/* Slide 1 Sync Hint Banner */}
+                <SpringPressable
+                  onPress={() => handleJumpToSlide(1)}
+                  pressedScale={0.98}
+                  haptic="selection"
+                  accessibilityRole="button"
+                  accessibilityLabel="切換至趨勢圖檢視聯動結果"
+                  style={[
+                    styles.trendSyncBanner,
+                    {
+                      backgroundColor: selectedSlice
+                        ? colors.primaryBg
+                        : colors.surfaceElevated,
+                      borderColor: selectedSlice ? colors.primary : colors.cardBorder,
+                    },
+                  ]}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={[styles.trendSyncText, { color: colors.textSecondary }]}
+                  >
+                    {selectedSlice
+                      ? `趨勢聯動：僅顯示「${selectedSlice.key}」走勢`
+                      : '趨勢聯動：顯示期間內全部實質收支'}
+                  </Text>
+                  <Text style={[styles.trendSyncAction, { color: colors.primary }]}>
+                    趨勢圖 ›
+                  </Text>
+                </SpringPressable>
+
+                {/* Breakdown Ranking List */}
+                {breakdownStats.length === 0 ? (
                   <View style={styles.emptyCategoryBox}>
                     <Text style={[styles.emptyCategoryText, { color: colors.textMuted }]}>
-                      此期間內尚無實質支出分類紀錄
+                      {`此期間內尚無實質${flow === 'expense' ? '支出' : '收入'}${dimension === 'category' ? '分類' : '帳戶'}資料`}
                     </Text>
                   </View>
                 ) : (
                   <View style={styles.rankingList}>
-                    {categoryStats.map((cat, idx) => {
-                      const isSelected = selectedCategory === cat.category;
-                      const isDimmed = Boolean(selectedCategory) && !isSelected;
-                      const meta = getCategoryMeta(cat.category);
+                    {breakdownStats.map((item, idx) => {
+                      const isSelected = activeSelectedKey === item.key;
+                      const isDimmed = Boolean(activeSelectedKey) && !isSelected;
+                      const badgeBg =
+                        dimension === 'category'
+                          ? getCategoryMeta(item.key).bgColor
+                          : getAccountMeta(item.key).bgColor;
+                      const resolvedAccountIcon =
+                        dimension === 'account'
+                          ? settings.accountIcons?.[item.key] || item.icon
+                          : item.icon;
 
                       return (
-                        <Pressable
-                          key={cat.category}
-                          onPress={() =>
-                            handleToggleCategory(isSelected ? null : cat.category)
-                          }
+                        <SpringPressable
+                          key={`${dimension}-${item.key}`}
+                          pressedScale={0.98}
+                          haptic="selection"
+                          onPress={() => handleToggleSlice(isSelected ? null : item.key)}
                           style={[
                             styles.rankingRow,
                             {
                               backgroundColor: isSelected
                                 ? colors.surfaceElevated
-                                : 'transparent',
-                              borderColor: isSelected ? cat.color : colors.divider,
-                              opacity: isDimmed ? 0.5 : 1,
+                                : colors.surface,
+                              borderColor: isSelected ? item.color : colors.cardBorder,
+                              opacity: isDimmed ? 0.48 : 1,
                             },
                           ]}
                         >
                           <View style={styles.rankingTop}>
                             <View style={styles.rankingLeft}>
                               <Text style={[styles.rankIndex, { color: colors.textMuted }]}>
-                                {idx + 1}
+                                {String(idx + 1).padStart(2, '0')}
                               </Text>
                               <View
                                 style={[
                                   styles.catIconBadge,
-                                  { backgroundColor: meta.bgColor },
+                                  {
+                                    backgroundColor: badgeBg,
+                                    borderColor: `${item.color}45`,
+                                  },
                                 ]}
                               >
-                                {renderCategoryIcon(cat.icon, cat.color, 16)}
+                                <LedgerIcon
+                                  name={dimension === 'category' ? item.icon : resolvedAccountIcon}
+                                  size={16}
+                                  color={item.color}
+                                />
                               </View>
-                              <View>
-                                <Text style={[styles.catName, { color: colors.text }]}>
-                                  {cat.category}
+                              <View style={styles.rankingNameCol}>
+                                <Text
+                                  numberOfLines={1}
+                                  style={[styles.catName, { color: colors.text }]}
+                                >
+                                  {item.key}
                                 </Text>
                                 <Text style={[styles.catCount, { color: colors.textMuted }]}>
-                                  {cat.count} 筆交易
+                                  {item.count} 筆交易
                                 </Text>
                               </View>
                             </View>
 
                             <View style={styles.rankingRight}>
                               <Text style={[styles.catAmount, { color: colors.text }]}>
-                                {formatMoney(cat.amount, baseCurrency)}
+                                {formatMoney(item.amount, baseCurrency)}
                               </Text>
                               <View
                                 style={[
                                   styles.pctPill,
-                                  { backgroundColor: `${cat.color}20` },
+                                  {
+                                    backgroundColor: `${item.color}1F`,
+                                    borderColor: `${item.color}55`,
+                                  },
                                 ]}
                               >
-                                <Text style={[styles.pctText, { color: cat.color }]}>
-                                  {cat.percentage.toFixed(1)}%
+                                <Text style={[styles.pctText, { color: item.color }]}>
+                                  {item.percentage.toFixed(1)}%
                                 </Text>
                               </View>
                             </View>
@@ -549,20 +931,26 @@ export default function AnalyticsScreen() {
                           <View
                             style={[
                               styles.catBarTrack,
-                              { backgroundColor: colors.divider },
+                              { backgroundColor: colors.surfaceElevated },
                             ]}
                           >
-                            <View
+                            <Animated.View
                               style={[
                                 styles.catBarFill,
                                 {
-                                  width: `${Math.min(100, Math.max(2, cat.percentage))}%`,
-                                  backgroundColor: cat.color,
+                                  width: rankingBarAnim.interpolate({
+                                    inputRange: [0, 1],
+                                    outputRange: [
+                                      '0%',
+                                      `${Math.min(100, Math.max(2, item.percentage))}%`,
+                                    ],
+                                  }),
+                                  backgroundColor: item.color,
                                 },
                               ]}
                             />
                           </View>
-                        </Pressable>
+                        </SpringPressable>
                       );
                     })}
                   </View>
@@ -577,6 +965,8 @@ export default function AnalyticsScreen() {
                 granularity={trendGranularity}
                 baseCurrency={baseCurrency}
                 isSingleDay={timeMode === 'day'}
+                filterLabel={selectedSlice ? selectedSlice.key : null}
+                onClearFilter={() => handleToggleSlice(null)}
                 onScrubbingChange={setIsScrubbingChart}
                 onSwipePrev={() => {
                   handleJumpToSlide(0);
@@ -585,7 +975,7 @@ export default function AnalyticsScreen() {
             </View>
           </ScrollView>
 
-          {/* Pagination Dots */}
+          {/* Tactical Pagination Indicators */}
           <View style={styles.paginationDotsRow}>
             {[0, 1].map((idx) => {
               const active = activeSlide === idx;
@@ -597,8 +987,8 @@ export default function AnalyticsScreen() {
                   style={[
                     styles.paginationDot,
                     {
-                      width: active ? 18 : 7,
-                      backgroundColor: active ? colors.primary : colors.border,
+                      width: active ? 22 : 8,
+                      backgroundColor: active ? colors.primary : colors.cardBorder,
                     },
                   ]}
                 />
@@ -608,7 +998,7 @@ export default function AnalyticsScreen() {
         </View>
       </ScrollView>
 
-      {/* Home-style Time Filter Modal */}
+      {/* Tactical Time Filter Modal */}
       <Modal
         visible={timeModalOpen}
         transparent
@@ -623,21 +1013,31 @@ export default function AnalyticsScreen() {
             style={[
               styles.pickerSheet,
               {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
+                backgroundColor: isDark
+                  ? 'rgba(10, 15, 30, 0.94)'
+                  : 'rgba(255, 255, 255, 0.96)',
+                borderColor: colors.primary,
               },
             ]}
             onPress={(e) => e.stopPropagation()}
           >
+            <HudReticle variant="primary" />
+
             <View style={styles.pickerHeader}>
               <Text style={[styles.pickerTitle, { color: colors.text }]}>
                 篩選時間
               </Text>
               <Pressable
                 onPress={() => setTimeModalOpen(false)}
-                style={[styles.pickerCloseBtn, { backgroundColor: colors.chipBg }]}
+                style={[
+                  styles.pickerCloseBtn,
+                  {
+                    backgroundColor: colors.surfaceElevated,
+                    borderColor: colors.cardBorder,
+                  },
+                ]}
               >
-                <X size={18} color={colors.textSecondary} />
+                <X size={16} color={colors.textSecondary} />
               </Pressable>
             </View>
 
@@ -646,7 +1046,7 @@ export default function AnalyticsScreen() {
                 styles.segmentedTabsRow,
                 {
                   backgroundColor: colors.surfaceElevated,
-                  borderColor: colors.border,
+                  borderColor: colors.cardBorder,
                 },
               ]}
             >
@@ -659,7 +1059,7 @@ export default function AnalyticsScreen() {
                     style={[
                       styles.segmentedTab,
                       isActive && {
-                        backgroundColor: colors.primaryLight,
+                        backgroundColor: colors.primaryBg,
                         borderColor: colors.primary,
                       },
                     ]}
@@ -685,7 +1085,7 @@ export default function AnalyticsScreen() {
             >
               {pickerOptions.options.length === 0 ? (
                 <Text style={[styles.pickerEmptyText, { color: colors.textMuted }]}>
-                  目前沒有可選擇的資料
+                  目前沒有可選擇的時間區間
                 </Text>
               ) : (
                 pickerOptions.options.map((opt) => {
@@ -698,9 +1098,9 @@ export default function AnalyticsScreen() {
                         styles.pickerOption,
                         {
                           backgroundColor: isSelected
-                            ? colors.primaryLight
+                            ? colors.primaryBg
                             : colors.surfaceElevated,
-                          borderColor: isSelected ? colors.primary : colors.border,
+                          borderColor: isSelected ? colors.primary : colors.cardBorder,
                         },
                         pressed && { opacity: 0.78 },
                       ]}
@@ -732,6 +1132,9 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
+  transparentBg: {
+    backgroundColor: 'transparent',
+  },
   scrollContent: {
     paddingHorizontal: 16,
     gap: 14,
@@ -742,29 +1145,53 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 2,
   },
+  headerTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  titleAccent: {
+    width: 4,
+    height: 22,
+    borderRadius: 2,
+  },
   pageTitle: {
-    fontSize: 26,
+    fontFamily: MONO_FONT,
+    fontSize: 22,
     fontWeight: '800',
-    letterSpacing: -0.5,
+    letterSpacing: 0.5,
   },
   timeFilterPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   timeFilterPillText: {
+    fontFamily: MONO_FONT,
     fontSize: 12,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   card: {
-    borderRadius: 20,
+    position: 'relative',
+    borderRadius: HUD_RADIUS_LG,
     borderWidth: 1,
     padding: 16,
+  },
+  cardBgClip: {
+    borderRadius: HUD_RADIUS_LG,
+    overflow: 'hidden',
+  },
+  topAccentStrip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
   },
   cashflowHeader: {
     flexDirection: 'row',
@@ -772,21 +1199,25 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 14,
   },
-  cashflowValueGroup: {
+  cashflowValueBlock: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    paddingRight: 10,
   },
   netCashflowValue: {
-    fontSize: 28,
+    fontFamily: MONO_FONT,
+    fontSize: 26,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.5,
   },
   cashflowIconBadge: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -796,18 +1227,24 @@ const styles = StyleSheet.create({
   },
   kpiPill: {
     flex: 1,
-    borderRadius: 14,
-    padding: 12,
-    gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+    padding: 11,
+    gap: 8,
   },
   kpiPillValue: {
-    fontSize: 16,
+    fontFamily: MONO_FONT,
+    fontSize: 15,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
   cardTitle: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontFamily: MONO_FONT,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   carouselContainer: {
     gap: 12,
@@ -826,7 +1263,7 @@ const styles = StyleSheet.create({
   carouselJumpBtn: {
     width: 30,
     height: 30,
-    borderRadius: 15,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -838,16 +1275,18 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   paginationDot: {
-    height: 7,
-    borderRadius: 999,
+    height: 4,
+    borderRadius: 2,
   },
   clearChip: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 5,
-    borderRadius: 999,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
   },
   clearChipText: {
-    fontSize: 12,
+    fontFamily: MONO_FONT,
+    fontSize: 11,
     fontWeight: '700',
   },
   donutWrap: {
@@ -855,22 +1294,59 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  dualControlsWrap: {
+    gap: 8,
+    marginBottom: 8,
+  },
+  dualControlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  controlHalf: {
+    flex: 1,
+  },
+  trendSyncBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+    marginTop: 4,
+  },
+  trendSyncText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  trendSyncAction: {
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  rankingNameCol: {
+    flex: 1,
+    minWidth: 0,
+  },
   emptyCategoryBox: {
     paddingVertical: 20,
     alignItems: 'center',
   },
   emptyCategoryText: {
-    fontSize: 13,
-    fontWeight: '500',
+    fontFamily: MONO_FONT,
+    fontSize: 12,
+    fontWeight: '600',
   },
   rankingList: {
     marginTop: 12,
-    gap: 10,
+    gap: 8,
   },
   rankingRow: {
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
-    padding: 12,
+    padding: 11,
   },
   rankingTop: {
     flexDirection: 'row',
@@ -881,20 +1357,22 @@ const styles = StyleSheet.create({
   rankingLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 9,
     flex: 1,
   },
   rankIndex: {
-    width: 16,
-    fontSize: 12,
+    width: 20,
+    fontFamily: MONO_FONT,
+    fontSize: 11,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },
   catIconBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 32,
+    height: 32,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -903,7 +1381,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   catCount: {
-    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontSize: 10,
+    fontVariant: ['tabular-nums'],
     marginTop: 1,
   },
   rankingRight: {
@@ -911,37 +1391,41 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   catAmount: {
+    fontFamily: MONO_FONT,
     fontSize: 14,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
   pctPill: {
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 999,
+    borderRadius: 4,
+    borderWidth: 1,
   },
   pctText: {
-    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontSize: 10,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   catBarTrack: {
-    height: 6,
-    borderRadius: 3,
+    height: 5,
+    borderRadius: 2,
     overflow: 'hidden',
   },
   catBarFill: {
     height: '100%',
-    borderRadius: 3,
+    borderRadius: 2,
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.56)',
+    backgroundColor: 'rgba(2, 6, 23, 0.72)',
     justifyContent: 'flex-end',
   },
   pickerSheet: {
-    borderTopLeftRadius: 26,
-    borderTopRightRadius: 26,
+    position: 'relative',
+    borderTopLeftRadius: HUD_RADIUS_LG,
+    borderTopRightRadius: HUD_RADIUS_LG,
     borderWidth: 1,
     borderBottomWidth: 0,
     padding: 20,
@@ -954,22 +1438,25 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   pickerTitle: {
-    fontSize: 17,
-    fontWeight: '700',
+    fontFamily: MONO_FONT,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   pickerCloseBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   segmentedTabsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 14,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
-    padding: 4,
+    padding: 3,
     gap: 4,
     marginBottom: 14,
   },
@@ -978,19 +1465,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 8,
-    borderRadius: 10,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: 'transparent',
   },
   segmentedTabText: {
-    fontSize: 13,
+    fontFamily: MONO_FONT,
+    fontSize: 12,
     fontWeight: '700',
   },
   pickerScroll: {
     maxHeight: 360,
   },
   pickerEmptyText: {
-    fontSize: 13,
+    fontFamily: MONO_FONT,
+    fontSize: 12,
     textAlign: 'center',
     paddingVertical: 24,
   },
@@ -999,13 +1488,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderRadius: 14,
+    paddingVertical: 12,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
     marginBottom: 8,
   },
   pickerOptionText: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontFamily: MONO_FONT,
+    fontSize: 13,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
   },
 });

@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   Modal,
   Platform,
   Pressable,
@@ -11,9 +13,18 @@ import {
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Trash2 } from 'lucide-react-native';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { LedgerIcon } from '@/components/LedgerIcon';
+import { HudReticle, MONO_FONT } from '@/components/ui/HudReticle';
+import { SpringPressable } from '@/components/ui/SpringPressable';
 import { useLedgerStore } from '@/store/useLedgerStore';
-import { getAccountMeta, getCategoryMeta } from '@/theme/colors';
+import {
+  HUD_RADIUS,
+  HUD_RADIUS_LG,
+  HUD_RETICLE_SIZE,
+  getAccountMeta,
+  getCategoryMeta,
+} from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { CurrencyCode, ExchangeRates, Transaction } from '@/types/ledger';
 import { EXCLUDED_FLOW_CATEGORIES } from '@/utils/analytics';
@@ -26,18 +37,44 @@ interface TransactionCardProps {
   showDate?: boolean;
 }
 
-export function TransactionCard({
+function withAlphaBorder(color: string, alphaHex: string): string {
+  return color.startsWith('#') && color.length === 7 ? `${color}${alphaHex}` : color;
+}
+
+function TransactionCardImpl({
   transaction,
   baseCurrency,
   exchangeRates,
   showDate = false,
 }: TransactionCardProps) {
   const router = useRouter();
-  const { colors } = useAppTheme();
+  const { colors, isDark } = useAppTheme();
   const deleteTransaction = useLedgerStore((s) => s.deleteTransaction);
 
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const isDeletingRef = useRef(false);
+
+  const mountProgress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const anim = Animated.timing(mountProgress, {
+      toValue: 1,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: Platform.OS !== 'web',
+    });
+    anim.start();
+    return () => {
+      anim.stop();
+    };
+  }, [mountProgress]);
+
+  const mountTranslateY = mountProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [6, 0],
+  });
 
   const catMeta = getCategoryMeta(transaction.category);
   const accMeta = getAccountMeta(transaction.account);
@@ -75,31 +112,44 @@ export function TransactionCard({
     true,
   )}`;
 
+  const resolveTransactionTargetId = (): number | string | undefined => {
+    const hasValidId =
+      transaction.id !== undefined &&
+      transaction.id !== null &&
+      String(transaction.id).trim() !== '';
+    if (hasValidId) return transaction.id;
+    return transaction.rowNumber;
+  };
+
   const handlePressCard = () => {
-    const targetId = String(transaction.id ?? transaction.rowNumber ?? '');
+    const targetId = String(resolveTransactionTargetId() ?? '');
     console.log(`[TransactionCard/openEdit] Tap - ID:${targetId}, Name:${transaction.name}`);
-    if (Platform.OS !== 'web') {
-      Haptics.selectionAsync().catch(() => {});
-    }
     router.push({
       pathname: '/quick-add',
       params: { editId: targetId },
     });
   };
 
-  const handleRequestDelete = () => {
+  const handleRequestDelete = (e?: { stopPropagation?: () => void }) => {
+    e?.stopPropagation?.();
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
+    setDeleteError(null);
     setConfirmVisible(true);
   };
 
   const handleConfirmDelete = async () => {
-    if (isDeleting) return;
-    const targetId = transaction.id ?? transaction.rowNumber;
-    if (targetId === undefined || targetId === null) return;
+    if (isDeletingRef.current || isDeleting) return;
+    const targetId = resolveTransactionTargetId();
+    if (targetId === undefined || targetId === null) {
+      setDeleteError('無法識別此交易編號，無法刪除');
+      return;
+    }
 
+    isDeletingRef.current = true;
     setIsDeleting(true);
+    setDeleteError(null);
     console.log(`[TransactionCard/delete] Confirm - Target:${targetId}, Name:${transaction.name}`);
     try {
       await deleteTransaction(targetId);
@@ -108,33 +158,85 @@ export function TransactionCard({
       }
       setConfirmVisible(false);
     } catch (err) {
-      console.warn('[TransactionCard/delete] Error -', err);
+      const msg = err instanceof Error ? err.message : '刪除交易失敗，請稍後再試';
+      console.warn('[TransactionCard/delete] Error -', msg);
+      setDeleteError(msg);
     } finally {
+      isDeletingRef.current = false;
       setIsDeleting(false);
     }
   };
 
+  const violetBorderColor = isDark
+    ? 'rgba(139, 92, 246, 0.45)'
+    : 'rgba(109, 40, 217, 0.35)';
+
   return (
-    <>
-      <Pressable
+    <Animated.View
+      style={{
+        opacity: mountProgress,
+        transform: [{ translateY: mountTranslateY }],
+      }}
+    >
+      <SpringPressable
         onPress={handlePressCard}
-        style={({ pressed }) => [
+        pressedScale={0.98}
+        haptic="selection"
+        style={[
           styles.card,
           {
             backgroundColor: colors.card,
-            borderColor: colors.cardBorder,
+            borderColor: violetBorderColor,
+            shadowColor: colors.accent,
+            shadowOpacity: isDark ? 0.25 : 0.08,
+            shadowRadius: 12,
+            shadowOffset: { width: 0, height: 4 },
+            elevation: isDark ? 4 : 2,
           },
-          pressed && { opacity: 0.85, transform: [{ scale: 0.992 }] },
         ]}
         accessibilityRole="button"
         accessibilityLabel={`${transaction.name} ${formattedOrig}`}
       >
-        {/* Left: Category circular badge */}
-        <View style={[styles.iconBadge, { backgroundColor: catMeta.bgColor }]}>
-          <LedgerIcon name={catMeta.icon} size={19} color={catMeta.color} strokeWidth={2.1} />
+        {/* Nebula Violet Ambient Gradient Wash + Left Glowing Core Bar */}
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <Svg width="100%" height="100%" preserveAspectRatio="none">
+            <Defs>
+              <LinearGradient id="txVioletWash" x1="0%" y1="0%" x2="100%" y2="100%">
+                <Stop offset="0%" stopColor={colors.accent} stopOpacity="0.10" />
+                <Stop offset="65%" stopColor={colors.accent} stopOpacity="0.02" />
+                <Stop offset="100%" stopColor={colors.accent} stopOpacity="0" />
+              </LinearGradient>
+            </Defs>
+            <Rect x="0" y="0" width="100%" height="100%" fill="url(#txVioletWash)" />
+          </Svg>
+        </View>
+        <View
+          pointerEvents="none"
+          style={[
+            styles.leftAccentBar,
+            {
+              backgroundColor: colors.accent,
+              opacity: isDark ? 0.72 : 0.55,
+            },
+          ]}
+        />
+
+        <HudReticle variant="accent" size={HUD_RETICLE_SIZE} />
+
+        {/* Left: Category tactical square badge */}
+        <View
+          style={[
+            styles.iconBadge,
+            {
+              backgroundColor: catMeta.bgColor,
+              borderColor: withAlphaBorder(catMeta.color, '55'),
+            },
+          ]}
+        >
+          <LedgerIcon name={catMeta.icon} size={18} color={catMeta.color} strokeWidth={2.1} />
         </View>
 
-        {/* Middle: Title, account pill, time, note */}
+        {/* Middle: Title, account chip, time, note */}
         <View style={styles.contentCol}>
           <View style={styles.titleRow}>
             <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
@@ -143,7 +245,15 @@ export function TransactionCard({
           </View>
 
           <View style={styles.metaRow}>
-            <View style={[styles.accountPill, { backgroundColor: accMeta.bgColor }]}>
+            <View
+              style={[
+                styles.accountPill,
+                {
+                  backgroundColor: accMeta.bgColor,
+                  borderColor: withAlphaBorder(accMeta.color, '4D'),
+                },
+              ]}
+            >
               <View style={[styles.accountDot, { backgroundColor: accMeta.color }]} />
               <Text style={[styles.accountText, { color: accMeta.color }]} numberOfLines={1}>
                 {transaction.account}
@@ -182,7 +292,10 @@ export function TransactionCard({
             hitSlop={8}
             style={({ pressed }) => [
               styles.deleteBtn,
-              { backgroundColor: colors.expenseBg },
+              {
+                backgroundColor: colors.expenseBg,
+                borderColor: withAlphaBorder(colors.expense, '4D'),
+              },
               pressed && { opacity: 0.7 },
             ]}
             accessibilityRole="button"
@@ -191,81 +304,156 @@ export function TransactionCard({
             <Trash2 size={14} color={colors.expense} strokeWidth={2} />
           </Pressable>
         </View>
-      </Pressable>
+      </SpringPressable>
 
-      {/* Delete Confirmation Modal (cross-platform: iOS, Android, Web) */}
-      <Modal
-        visible={confirmVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => !isDeleting && setConfirmVisible(false)}
-      >
-        <Pressable
-          style={styles.modalBackdrop}
-          onPress={() => !isDeleting && setConfirmVisible(false)}
+      {/* Delete Confirmation Modal (lazy-mounted only when confirmVisible is true) */}
+      {confirmVisible ? (
+        <Modal
+          visible={confirmVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !isDeleting && setConfirmVisible(false)}
         >
           <Pressable
-            style={[
-              styles.modalCard,
-              {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
-              },
-            ]}
-            onPress={(e) => e.stopPropagation()}
+            style={styles.modalBackdrop}
+            onPress={() => !isDeleting && setConfirmVisible(false)}
           >
-            <Text style={[styles.modalTitle, { color: colors.text }]}>確認刪除交易？</Text>
-            <Text style={[styles.modalMessage, { color: colors.textSecondary }]}>
-              確定要刪除「{transaction.name || transaction.category}」({formattedOrig}) 嗎？此動作無法復原。
-            </Text>
+            <Pressable
+              style={[
+                styles.modalCard,
+                {
+                  backgroundColor: colors.surface,
+                  borderColor: withAlphaBorder(colors.danger, '80'),
+                },
+              ]}
+              onPress={(e) => e.stopPropagation()}
+            >
+              <HudReticle color={colors.danger} size={HUD_RETICLE_SIZE} />
+              <Text style={[styles.modalTitle, { color: colors.text }]}>刪除交易紀錄？</Text>
+              <Text style={[styles.modalMessage, { color: colors.textSecondary }]}>
+                確定要刪除「{transaction.name || transaction.category}」({formattedOrig}) 嗎？此動作無法復原。
+              </Text>
 
-            <View style={styles.modalActions}>
-              <Pressable
-                onPress={() => setConfirmVisible(false)}
-                disabled={isDeleting}
-                style={[
-                  styles.modalBtn,
-                  { backgroundColor: colors.chipBg },
-                ]}
-              >
-                <Text style={[styles.modalBtnText, { color: colors.textSecondary }]}>取消</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleConfirmDelete}
-                disabled={isDeleting}
-                style={[
-                  styles.modalBtn,
-                  { backgroundColor: colors.danger },
-                ]}
-              >
-                {isDeleting ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={[styles.modalBtnText, { color: '#FFFFFF' }]}>確認刪除</Text>
-                )}
-              </Pressable>
-            </View>
+              {deleteError ? (
+                <View
+                  style={[
+                    styles.deleteErrorBox,
+                    { backgroundColor: colors.expenseBg, borderColor: colors.expense },
+                  ]}
+                >
+                  <Text style={[styles.deleteErrorText, { color: colors.expense }]}>
+                    {deleteError}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={styles.modalActions}>
+                <Pressable
+                  onPress={() => setConfirmVisible(false)}
+                  disabled={isDeleting}
+                  style={[
+                    styles.modalBtn,
+                    {
+                      backgroundColor: colors.chipBg,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.modalBtnText, { color: colors.textSecondary }]}>取消</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleConfirmDelete}
+                  disabled={isDeleting}
+                  style={[
+                    styles.modalBtn,
+                    {
+                      backgroundColor: colors.danger,
+                      borderColor: colors.danger,
+                    },
+                  ]}
+                >
+                  {isDeleting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Text style={[styles.modalBtnText, { color: '#FFFFFF' }]}>確認刪除</Text>
+                  )}
+                </Pressable>
+              </View>
+            </Pressable>
           </Pressable>
-        </Pressable>
-      </Modal>
-    </>
+        </Modal>
+      ) : null}
+    </Animated.View>
   );
 }
 
+function areTransactionCardPropsEqual(
+  prev: TransactionCardProps,
+  next: TransactionCardProps,
+): boolean {
+  if (prev.baseCurrency !== next.baseCurrency) return false;
+  if (prev.showDate !== next.showDate) return false;
+  if (prev.exchangeRates !== next.exchangeRates) {
+    if (
+      !prev.exchangeRates ||
+      !next.exchangeRates ||
+      prev.exchangeRates.base !== next.exchangeRates.base ||
+      prev.exchangeRates.updated !== next.exchangeRates.updated ||
+      prev.exchangeRates.rates !== next.exchangeRates.rates
+    ) {
+      return false;
+    }
+  }
+  const a = prev.transaction;
+  const b = next.transaction;
+  if (a === b) return true;
+  return (
+    a.id === b.id &&
+    a.rowNumber === b.rowNumber &&
+    a.date === b.date &&
+    a.time === b.time &&
+    a.account === b.account &&
+    a.name === b.name &&
+    a.category === b.category &&
+    a.currency === b.currency &&
+    a.amount === b.amount &&
+    a.note === b.note &&
+    a.updatedAt === b.updatedAt
+  );
+}
+
+export const TransactionCard = React.memo(
+  TransactionCardImpl,
+  areTransactionCardPropsEqual,
+);
+TransactionCard.displayName = 'TransactionCard';
+
 const styles = StyleSheet.create({
   card: {
+    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 18,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
+    overflow: 'hidden',
     paddingHorizontal: 13,
     paddingVertical: 12,
     gap: 12,
   },
+  leftAccentBar: {
+    position: 'absolute',
+    top: 6,
+    bottom: 6,
+    left: 0,
+    width: 2,
+    borderTopRightRadius: 2,
+    borderBottomRightRadius: 2,
+  },
   iconBadge: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 40,
+    height: 40,
+    borderRadius: 6,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -293,23 +481,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 7,
+    paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 999,
-    maxWidth: 105,
+    borderRadius: 4,
+    borderWidth: 1,
+    maxWidth: 118,
   },
   accountDot: {
     width: 5,
     height: 5,
-    borderRadius: 2.5,
+    borderRadius: 1,
   },
   accountText: {
-    fontSize: 11,
+    fontFamily: MONO_FONT,
+    fontSize: 10,
     fontWeight: '700',
   },
   metaText: {
+    fontFamily: MONO_FONT,
     fontSize: 11,
     fontWeight: '500',
+    fontVariant: ['tabular-nums'],
     flexShrink: 1,
   },
   noteText: {
@@ -325,11 +517,13 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   primaryAmount: {
+    fontFamily: MONO_FONT,
     fontSize: 15,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
   },
   convertedAmount: {
+    fontFamily: MONO_FONT,
     fontSize: 11,
     fontWeight: '600',
     marginTop: 2,
@@ -338,32 +532,48 @@ const styles = StyleSheet.create({
   deleteBtn: {
     width: 30,
     height: 30,
-    borderRadius: 10,
+    borderRadius: 6,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.58)',
+    backgroundColor: 'rgba(2, 6, 23, 0.68)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
   },
   modalCard: {
+    position: 'relative',
     width: '100%',
     maxWidth: 360,
-    borderRadius: 22,
+    borderRadius: HUD_RADIUS_LG,
     borderWidth: 1,
     padding: 20,
   },
   modalTitle: {
-    fontSize: 17,
-    fontWeight: '700',
+    fontFamily: MONO_FONT,
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   modalMessage: {
     fontSize: 14,
     lineHeight: 20,
-    marginTop: 8,
+    marginTop: 10,
+  },
+  deleteErrorBox: {
+    marginTop: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  deleteErrorText: {
+    fontFamily: MONO_FONT,
+    fontSize: 12,
+    fontWeight: '700',
   },
   modalActions: {
     flexDirection: 'row',
@@ -372,15 +582,17 @@ const styles = StyleSheet.create({
     marginTop: 18,
   },
   modalBtn: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 10,
-    borderRadius: 12,
-    minWidth: 82,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+    minWidth: 88,
     alignItems: 'center',
     justifyContent: 'center',
   },
   modalBtnText: {
-    fontSize: 14,
+    fontFamily: MONO_FONT,
+    fontSize: 13,
     fontWeight: '700',
   },
 });

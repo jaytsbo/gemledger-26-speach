@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -7,8 +7,10 @@ import {
   View,
 } from 'react-native';
 import { FileJson, FileSpreadsheet } from 'lucide-react-native';
+import { MONO_FONT } from '@/components/ui/HudReticle';
 import { ApiService } from '@/services/apiService';
 import { useLedgerStore } from '@/store/useLedgerStore';
+import { HUD_RADIUS } from '@/theme/colors';
 import { useAppTheme } from '@/theme/ThemeContext';
 import { SettingsModalFrame } from './SettingsModalFrame';
 import { deliverExportFile, FeedbackState } from './settingsHelpers';
@@ -19,6 +21,12 @@ interface ExportBackupModalProps {
   onFeedback: (fb: FeedbackState) => void;
 }
 
+function getLocalDateStr(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 export function ExportBackupModal({
   visible,
   onClose,
@@ -27,14 +35,27 @@ export function ExportBackupModal({
   const { colors } = useAppTheme();
   const transactions = useLedgerStore((s) => s.transactions);
   const [exportingFormat, setExportingFormat] = useState<'csv' | 'json' | null>(null);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const isExportingRef = useRef(false);
+
+  useEffect(() => {
+    if (!visible) {
+      setInlineError(null);
+      isExportingRef.current = false;
+      setExportingFormat(null);
+    }
+  }, [visible]);
 
   const handleExport = async (format: 'csv' | 'json') => {
+    if (isExportingRef.current) return;
+    isExportingRef.current = true;
+    setInlineError(null);
     console.log(
       `[Settings/ExportBackupModal] Export - format=${format}, count=${transactions.length}`,
     );
     setExportingFormat(format);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getLocalDateStr();
       if (format === 'csv') {
         const csv = await ApiService.exportTransactionsCSV(transactions);
         const modeUsed = await deliverExportFile(
@@ -60,11 +81,14 @@ export function ExportBackupModal({
       }
       onClose();
     } catch (err) {
+      const msg = err instanceof Error ? err.message : '匯出備份失敗';
+      setInlineError(msg);
       onFeedback({
         type: 'error',
-        message: err instanceof Error ? err.message : '匯出備份失敗',
+        message: msg,
       });
     } finally {
+      isExportingRef.current = false;
       setExportingFormat(null);
     }
   };
@@ -72,11 +96,22 @@ export function ExportBackupModal({
   return (
     <SettingsModalFrame
       visible={visible}
-      title="匯出備份"
+      title="備份匯出"
       subtitle={`目前共有 ${transactions.length} 筆交易紀錄`}
       onClose={onClose}
       scrollable={false}
     >
+      {inlineError ? (
+        <View
+          style={[
+            styles.errorBox,
+            { backgroundColor: colors.expenseBg, borderColor: colors.expense },
+          ]}
+        >
+          <Text style={[styles.errorText, { color: colors.expense }]}>{inlineError}</Text>
+        </View>
+      ) : null}
+
       <Text style={[styles.hint, { color: colors.textSecondary }]}>
         選擇匯出格式。CSV 適合試算表檢視或重新匯入；JSON 保留完整欄位結構。
       </Text>
@@ -94,7 +129,12 @@ export function ExportBackupModal({
             },
           ]}
         >
-          <View style={[styles.iconBox, { backgroundColor: colors.incomeBg }]}>
+          <View
+            style={[
+              styles.iconBox,
+              { backgroundColor: colors.incomeBg, borderColor: colors.income },
+            ]}
+          >
             {exportingFormat === 'csv' ? (
               <ActivityIndicator size="small" color={colors.income} />
             ) : (
@@ -107,6 +147,16 @@ export function ExportBackupModal({
             </Text>
             <Text style={[styles.optionDesc, { color: colors.textMuted }]}>
               相容 Excel 與 Google Sheets（含 UTF-8 BOM）
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.formatBadge,
+              { backgroundColor: colors.incomeBg, borderColor: colors.income },
+            ]}
+          >
+            <Text style={[styles.formatBadgeText, { color: colors.income }]}>
+              .CSV
             </Text>
           </View>
         </Pressable>
@@ -123,7 +173,12 @@ export function ExportBackupModal({
             },
           ]}
         >
-          <View style={[styles.iconBox, { backgroundColor: colors.primaryLight }]}>
+          <View
+            style={[
+              styles.iconBox,
+              { backgroundColor: colors.primaryBg, borderColor: colors.primary },
+            ]}
+          >
             {exportingFormat === 'json' ? (
               <ActivityIndicator size="small" color={colors.primary} />
             ) : (
@@ -136,6 +191,16 @@ export function ExportBackupModal({
             </Text>
             <Text style={[styles.optionDesc, { color: colors.textMuted }]}>
               完整結構化備份檔案（.json）
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.formatBadge,
+              { backgroundColor: colors.primaryBg, borderColor: colors.primary },
+            ]}
+          >
+            <Text style={[styles.formatBadgeText, { color: colors.primary }]}>
+              .JSON
             </Text>
           </View>
         </Pressable>
@@ -157,13 +222,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     padding: 14,
-    borderRadius: 16,
+    borderRadius: HUD_RADIUS,
     borderWidth: 1,
   },
   iconBox: {
     width: 42,
     height: 42,
-    borderRadius: 12,
+    borderRadius: 6,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -172,10 +238,33 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   optionTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '800',
+    fontFamily: MONO_FONT,
+    letterSpacing: 0.3,
   },
   optionDesc: {
     fontSize: 12,
+  },
+  formatBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  formatBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    fontFamily: MONO_FONT,
+    fontVariant: ['tabular-nums'],
+  },
+  errorBox: {
+    padding: 10,
+    borderRadius: HUD_RADIUS,
+    borderWidth: 1,
+  },
+  errorText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

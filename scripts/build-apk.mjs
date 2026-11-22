@@ -7,16 +7,18 @@ const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const APP_JSON_PATH = path.join(ROOT_DIR, 'app.json');
 const ANDROID_DIR = path.join(ROOT_DIR, 'android');
 const APP_GRADLE_PATH = path.join(ANDROID_DIR, 'app', 'build.gradle');
-const APK_REL_PATH = path.join('android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
+const APK_DIR_REL_PATH = path.join('android', 'app', 'build', 'outputs', 'apk', 'release');
+const APK_REL_PATH = path.join(APK_DIR_REL_PATH, 'app-release.apk');
 
 function readAppVersion() {
   const appJson = JSON.parse(fs.readFileSync(APP_JSON_PATH, 'utf8'));
+  const appName = (appJson.expo?.name || 'app-release').replace(/[^a-zA-Z0-9._-]/g, '-');
   const version = appJson.expo?.version;
   const versionCode = appJson.expo?.android?.versionCode;
   if (!version || !Number.isInteger(versionCode)) {
     throw new Error('app.json must define expo.version and integer expo.android.versionCode');
   }
-  return { version, versionCode };
+  return { appName, version, versionCode };
 }
 
 function syncGradleVersions(gradlePath, versionCode, versionName) {
@@ -46,7 +48,7 @@ function resolveAndroidHome(env) {
 }
 
 function main() {
-  const { version, versionCode } = readAppVersion();
+  const { appName, version, versionCode } = readAppVersion();
   console.log(`[build-apk] Target version: ${version} (versionCode: ${versionCode})`);
 
   if (!fs.existsSync(ANDROID_DIR)) {
@@ -66,8 +68,19 @@ function main() {
   console.log(`[build-apk] Running ${gradlew} assembleRelease...`);
   execSync(`${gradlew} assembleRelease`, { cwd: ANDROID_DIR, env, stdio: 'inherit' });
 
+  const versionedApkName = `${appName}-v${version}.apk`;
+  const versionedApkRelPath = path.join(APK_DIR_REL_PATH, versionedApkName);
+  const srcApkPath = path.join(ROOT_DIR, APK_REL_PATH);
+  const destApkPath = path.join(ROOT_DIR, versionedApkRelPath);
+  if (fs.existsSync(srcApkPath)) {
+    fs.copyFileSync(srcApkPath, destApkPath);
+    console.log(
+      `[build-apk/copyVersionedApk] Copied - Input:${APK_REL_PATH} / Output:${versionedApkRelPath}`,
+    );
+  }
+
   console.log(`[build-apk] Done! Version: ${version} (${versionCode})`);
-  console.log(`[build-apk] APK: ${APK_REL_PATH}`);
+  console.log(`[build-apk] APK: ${versionedApkRelPath}`);
 }
 
 main();
